@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+
+# Tooling caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Environment
+.env
+.env.local
+
+# Airflow runtime state (logs, the local scheduler database, generated config)
+airflow/logs/
+airflow/plugins/__pycache__/
+airflow/airflow.cfg
+airflow/airflow.db
+airflow/webserver_config.py
+
+# Evaluation output
+results/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Local agent and editor configuration
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+
+# Local build spec (not published)
+docs/BUILD-SPEC.md

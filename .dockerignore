@@ -1,0 +1,17 @@
+# Deny everything, then allow back only what the image needs. An allowlist cannot
+# silently leak a newly added directory into the build context the way a denylist does.
+*
+
+!pyproject.toml
+!uv.lock
+!README.md
+!alembic.ini
+!alembic/
+!src/
+
+# Re-exclude what would otherwise ride along inside the allowed directories.
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
