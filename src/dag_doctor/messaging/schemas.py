@@ -9,7 +9,8 @@ The same module is imported by the Airflow callback that produces the message an
 worker that consumes it, so producer and consumer cannot drift apart.
 """
 
-from datetime import datetime
+import base64
+from datetime import UTC, datetime
 from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -96,3 +97,54 @@ class TaskFailureMessage(BaseModel):
                 details={"received": message.schema_version, "supported": SCHEMA_VERSION},
             )
         return message
+
+
+class DeadLetterMessage(BaseModel):
+    """One message that could not be processed, parked with the reason why.
+
+    The original bytes are carried verbatim, base64 encoded, rather than the parsed
+    fields: a message lands here precisely because parsing it did not work, and a
+    lossy record of a poison message cannot be replayed once the bug is fixed.
+    """
+
+    schema_version: int = SCHEMA_VERSION
+    reason: str
+    error: str
+    source_topic: str
+    source_partition: int
+    source_offset: int
+    delivery_attempts: int
+    parked_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    original_payload_b64: str
+
+    @classmethod
+    def park(
+        cls,
+        raw: bytes,
+        *,
+        reason: str,
+        error: str,
+        topic: str,
+        partition: int,
+        offset: int,
+        attempts: int,
+    ) -> Self:
+        """Wrap a failed message with the context needed to understand and replay it."""
+        return cls(
+            reason=reason,
+            error=error,
+            source_topic=topic,
+            source_partition=partition,
+            source_offset=offset,
+            delivery_attempts=attempts,
+            original_payload_b64=base64.b64encode(raw).decode("ascii"),
+        )
+
+    @property
+    def original_payload(self) -> bytes:
+        """The exact bytes that were on the source topic."""
+        return base64.b64decode(self.original_payload_b64)
+
+    def to_bytes(self) -> bytes:
+        """Serialise to the JSON payload that goes on the dead-letter topic."""
+        return self.model_dump_json().encode()

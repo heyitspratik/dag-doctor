@@ -66,6 +66,21 @@ class HaltReason(StrEnum):
     INVESTIGATION_ERROR = "investigation_error"
 
 
+class IncidentStatus(StrEnum):
+    """Where an incident is in its lifecycle.
+
+    ``RECEIVED`` and ``INVESTIGATING`` are the only non-terminal states. ``FAILED`` means
+    the investigation itself broke, which is distinct from ``INCONCLUSIVE``, where the
+    investigation ran correctly and honestly could not decide.
+    """
+
+    RECEIVED = "received"
+    INVESTIGATING = "investigating"
+    DIAGNOSED = "diagnosed"
+    INCONCLUSIVE = "inconclusive"
+    FAILED = "failed"
+
+
 class HypothesisOutcome(StrEnum):
     """The result of executing a hypothesis's falsifiable test."""
 

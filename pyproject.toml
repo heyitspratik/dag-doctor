@@ -41,6 +41,11 @@ dependencies = [
 # REST API as an outsider, so it never imports the package; only the DAG files do, and
 # those run inside the Airflow container.
 
+[project.scripts]
+# Two entrypoints from one image, which is why the worker and the API can be scaled
+# independently without maintaining two builds.
+dag-doctor-worker = "dag_doctor.worker.main:main"
+
 [project.urls]
 Homepage = "https://github.com/pratikahir/dag-doctor"
 Repository = "https://github.com/pratikahir/dag-doctor"
@@ -53,6 +58,8 @@ dev = [
     "types-pyyaml>=6.0",
 ]
 test = [
+    "aiosqlite>=0.22.1",
+    "greenlet>=3.5.5",
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "pytest-cov>=6.0",
@@ -96,7 +103,7 @@ convention = "google"
 [tool.ruff.lint.per-file-ignores]
 # Tests are self-documenting through their names, and interface stubs legitimately
 # ignore the arguments they are handed.
-"tests/**" = ["D100", "D101", "D102", "D103", "D104", "D107", "ARG001", "ARG002"]
+"tests/**" = ["D100", "D101", "D102", "D103", "D104", "D105", "D107", "ARG001", "ARG002"]
 "alembic/**" = ["D", "N999"]
 # Airflow DAG files are declarative and follow Airflow's own module conventions.
 "airflow/dags/**" = ["D100", "D103", "ARG001"]

@@ -53,6 +53,29 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
+  integration:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    # testcontainers starts its own Postgres, so the versions here match what the compose
+    # stack runs rather than whatever a service container happened to pin.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Sync dependencies
+        run: uv sync --all-groups --frozen
+
+      - name: Integration tests
+        run: uv run pytest -m integration
+
   dags:
     name: Parse the seeded DAGs
     runs-on: ubuntu-latest

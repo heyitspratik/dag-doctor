@@ -108,6 +108,36 @@ services:
       retries: 20
       start_period: 30s
 
+  migrate:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: dag-doctor:local
+    environment:
+      POSTGRES_DSN: postgresql+psycopg://dagdoctor:dagdoctor@postgres:5432/dag_doctor
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  agent-worker:
+    image: dag-doctor:local
+    environment:
+      APP_ENV: ${APP_ENV:-dev}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      POSTGRES_DSN: postgresql+psycopg://dagdoctor:dagdoctor@postgres:5432/dag_doctor
+      AIRFLOW_DSN: postgresql+psycopg://dagdoctor_ro:dagdoctor_ro@postgres:5432/airflow
+      AIRFLOW_BASE_URL: http://airflow-webserver:8080
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      OLLAMA_BASE_URL: http://ollama:11434
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redpanda-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
   airflow-init:
     <<: *airflow-common
     entrypoint: ["/bin/bash", "-c"]

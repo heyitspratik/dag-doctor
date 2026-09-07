@@ -27,13 +27,13 @@ loops until a hypothesis survives its test or a budget is exhausted.
 
 ## Quickstart
 
-The agent worker and API are not built yet, so the stack currently ends at "a failure
-lands on the topic".
+The investigation graph is not built yet, so the stack currently ends at "a failure
+becomes an incident row".
 
 ```bash
 make dev                              # sync dependencies, install the pre-commit hooks
 make check                            # lint, type-check, unit tests
-make up                               # postgres, redpanda, ollama, airflow
+make up                               # postgres, redpanda, ollama, airflow, the worker
 make seed-failures                    # trigger every seeded DAG
 make topic-tail                       # see the failure events on airflow.task.failed
 ```

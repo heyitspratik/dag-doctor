@@ -2,7 +2,6 @@
 
 import pytest
 
-from dag_doctor.core.models import FailureEvent
 from dag_doctor.core.settings import KafkaSettings
 
 
@@ -55,15 +54,3 @@ def producer() -> FakeProducer:
 @pytest.fixture
 def kafka_settings() -> KafkaSettings:
     return KafkaSettings()
-
-
-@pytest.fixture
-def failure_event() -> FailureEvent:
-    return FailureEvent(
-        dag_id="schema_drift_orders",
-        task_id="build_orders_by_customer",
-        run_id="manual__2026-09-07T10:00:00+00:00",
-        try_number=1,
-        exception_type="UndefinedColumn",
-        exception_message='column "customer_id" does not exist',
-    )
