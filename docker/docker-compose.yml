@@ -1,0 +1,161 @@
+name: dag-doctor
+
+# Image tags are pinned and overridable. Bumping one is a single variable, which matters
+# because a stale pin is the most common reason a cloned repository will not start.
+x-airflow-common: &airflow-common
+  build:
+    context: ..
+    dockerfile: docker/airflow.Dockerfile
+    args:
+      AIRFLOW_IMAGE_TAG: ${AIRFLOW_IMAGE_TAG:-2.10.5}
+  user: "${AIRFLOW_UID:-50000}:0"
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+    AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.session,airflow.api.auth.backend.basic_auth
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+    # The DAG files import the agent's callback from here rather than from an installed
+    # wheel, so producer and consumer share one schema definition and cannot drift.
+    PYTHONPATH: /opt/airflow/dag_doctor_src
+    # The warehouse the broken DAGs read and write. Separate from both Airflow's metadata
+    # database and the agent's own, because conflating them would let the agent inspect
+    # its own state and call it evidence.
+    AIRFLOW_CONN_WAREHOUSE: postgres://warehouse:warehouse@postgres:5432/warehouse
+    KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+    KAFKA_TOPIC_FAILURES: airflow.task.failed
+    LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  volumes:
+    - ../airflow/dags:/opt/airflow/dags:ro
+    - ../airflow/seed:/opt/airflow/seed:ro
+    - ../src:/opt/airflow/dag_doctor_src:ro
+    - airflow-logs:/opt/airflow/logs
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redpanda-init:
+      condition: service_completed_successfully
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    environment:
+      POSTGRES_USER: dagdoctor
+      POSTGRES_PASSWORD: dagdoctor
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+      # A subdirectory, so the entrypoint ignores it and 02-warehouse-schema.sh decides
+      # which of these files to run and in what order.
+      - ../airflow/seed:/docker-entrypoint-initdb.d/warehouse:ro
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dagdoctor -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redpanda:
+    image: ${REDPANDA_IMAGE:-docker.redpanda.com/redpandadata/redpanda:v24.2.7}
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --overprovisioned
+      - --node-id=0
+      - --mode=dev-container
+      # Two listeners: containers reach the broker as redpanda:9092, the host reaches it
+      # as localhost:19092. One advertised address cannot be correct for both.
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
+    ports:
+      - "${REDPANDA_PORT:-19092}:19092"
+      - "${REDPANDA_ADMIN_PORT:-9644}:9644"
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redpanda-init:
+    image: ${REDPANDA_IMAGE:-docker.redpanda.com/redpandadata/redpanda:v24.2.7}
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    # Idempotent: re-running the stack must not fail because the topics already exist.
+    command: >
+      "rpk topic create airflow.task.failed agent.diagnosis.completed airflow.task.failed.dlq
+       --brokers redpanda:9092 --partitions 3 --replicas 1 || true;
+       rpk topic list --brokers redpanda:9092"
+    restart: "no"
+
+  ollama:
+    image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: ["/bin/bash", "-c"]
+    command: >
+      "airflow db migrate &&
+       airflow users create --username ${AIRFLOW_USERNAME:-airflow}
+         --password ${AIRFLOW_PASSWORD:-airflow} --firstname Dag --lastname Doctor
+         --role Admin --email dag-doctor@example.com || true"
+    restart: "no"
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redpanda-init:
+        condition: service_completed_successfully
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type SchedulerJob --hostname "$${HOSTNAME}"']
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "${AIRFLOW_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redpanda-init:
+        condition: service_completed_successfully
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  postgres-data:
+  redpanda-data:
+  ollama-models:
+  airflow-logs:

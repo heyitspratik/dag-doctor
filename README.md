@@ -27,12 +27,33 @@ loops until a hypothesis survives its test or a budget is exhausted.
 
 ## Quickstart
 
-Not yet runnable end to end. Once the stack lands:
+The agent worker and API are not built yet, so the stack currently ends at "a failure
+lands on the topic".
 
 ```bash
-make dev        # sync dependencies and install the pre-commit hooks
-make check      # lint, type-check, unit tests
+make dev                              # sync dependencies, install the pre-commit hooks
+make check                            # lint, type-check, unit tests
+make up                               # postgres, redpanda, ollama, airflow
+make seed-failures                    # trigger every seeded DAG
+make topic-tail                       # see the failure events on airflow.task.failed
 ```
+
+Airflow is at http://localhost:8080 (`airflow` / `airflow`). `schema_drift_orders` fails
+by design and `healthy_baseline` succeeds; only the first should put a message on the
+topic.
+
+Every image tag in `docker/docker-compose.yml` is an overridable variable
+(`AIRFLOW_IMAGE_TAG`, `POSTGRES_IMAGE`, `REDPANDA_IMAGE`, `OLLAMA_IMAGE`), because a stale
+pin is the most common reason a cloned repository will not start.
+
+### The seeded failures
+
+| DAG | Failure | Correct diagnosis |
+|---|---|---|
+| `schema_drift_orders` | An upstream rename breaks a downstream aggregate | Schema drift, naming the changed column |
+| `healthy_baseline` | None. The control | The agent must never be invoked |
+
+Six more scenarios land with the evaluation harness.
 
 ## Design notes
 

@@ -2,10 +2,13 @@ UV      ?= uv
 COMPOSE ?= docker compose -f docker/docker-compose.yml
 CHART   ?= deploy/helm/dag-doctor
 KIND_CLUSTER ?= dag-doctor
+AIRFLOW_URL  ?= http://localhost:8080
+AIRFLOW_AUTH ?= airflow:airflow
 
 .DEFAULT_GOAL := help
-.PHONY: help install dev up down logs migrate pull-models seed-failures evaluate \
-        test test-integration lint format typecheck check helm-lint kind-deploy clean
+.PHONY: help install dev up down logs migrate pull-models trigger seed-failures \
+        topic-tail evaluate test test-integration lint format typecheck check \
+        helm-lint kind-deploy clean
 
 help:  ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -34,8 +37,23 @@ migrate:  ## Apply database migrations
 pull-models:  ## Pull the default Ollama model (several GB on first run)
 	$(COMPOSE) exec ollama ollama pull $${OLLAMA_MODEL:-llama3.2:3b}
 
-seed-failures:  ## Trigger every broken DAG so the agent has incidents to diagnose
-	$(UV) run python -m dag_doctor.evaluation.runner seed
+trigger:  ## Trigger one DAG: make trigger DAG=schema_drift_orders
+	@test -n "$(DAG)" || { echo "usage: make trigger DAG=<dag_id>"; exit 2; }
+	@curl -sS -u $(AIRFLOW_AUTH) -X POST -H 'Content-Type: application/json' \
+		-d '{"conf": {}}' $(AIRFLOW_URL)/api/v1/dags/$(DAG)/dagRuns \
+		| head -c 400
+	@echo
+
+seed-failures:  ## Trigger every seeded DAG so the agent has incidents to diagnose
+	@for dag_file in airflow/dags/*.py; do \
+		dag_id=$$(basename $$dag_file .py); \
+		echo "triggering $$dag_id"; \
+		$(MAKE) --no-print-directory trigger DAG=$$dag_id; \
+	done
+
+topic-tail:  ## Print what is currently on the failure topic
+	$(COMPOSE) exec redpanda rpk topic consume airflow.task.failed \
+		--brokers localhost:9092 --num 10 --offset start
 
 evaluate:  ## Trigger the scenarios, wait for diagnoses, print the accuracy table
 	$(UV) run python -m dag_doctor.evaluation.runner evaluate

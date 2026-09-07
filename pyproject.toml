@@ -114,6 +114,13 @@ plugins = ["pydantic.mypy"]
 warn_unreachable = true
 enable_error_code = ["redundant-expr", "truthy-bool", "ignore-without-code"]
 
+# aiokafka ships no type information. Declared once here rather than as a per-import
+# ignore, so the exception is visible in one place. The Protocol in messaging/producer.py
+# is what keeps the untyped client behind a checked boundary.
+[[tool.mypy.overrides]]
+module = ["aiokafka.*"]
+ignore_missing_imports = true
+
 [tool.pydantic-mypy]
 init_forbid_extra = true
 init_typed = true
