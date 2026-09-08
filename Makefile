@@ -4,6 +4,8 @@ CHART   ?= deploy/helm/dag-doctor
 KIND_CLUSTER ?= dag-doctor
 AIRFLOW_URL  ?= http://localhost:8080
 AIRFLOW_AUTH ?= airflow:airflow
+AGENT_URL    ?= http://localhost:8000
+EVAL_OUTPUT  ?= results/accuracy.md
 
 .DEFAULT_GOAL := help
 .PHONY: help install dev up down logs migrate pull-models trigger seed-failures \
@@ -45,18 +47,15 @@ trigger:  ## Trigger one DAG: make trigger DAG=schema_drift_orders
 	@echo
 
 seed-failures:  ## Trigger every seeded DAG so the agent has incidents to diagnose
-	@for dag_file in airflow/dags/*.py; do \
-		dag_id=$$(basename $$dag_file .py); \
-		echo "triggering $$dag_id"; \
-		$(MAKE) --no-print-directory trigger DAG=$$dag_id; \
-	done
+	$(UV) run python -m dag_doctor.evaluation.runner seed --agent-url $(AGENT_URL)
 
 topic-tail:  ## Print what is currently on the failure topic
 	$(COMPOSE) exec redpanda rpk topic consume airflow.task.failed \
 		--brokers localhost:9092 --num 10 --offset start
 
 evaluate:  ## Trigger the scenarios, wait for diagnoses, print the accuracy table
-	$(UV) run python -m dag_doctor.evaluation.runner evaluate
+	$(UV) run python -m dag_doctor.evaluation.runner evaluate \
+		--agent-url $(AGENT_URL) --output $(EVAL_OUTPUT)
 
 test:  ## Run unit tests with the coverage gate
 	$(UV) run pytest --cov --cov-report=term-missing --cov-report=xml

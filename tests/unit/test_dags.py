@@ -105,3 +105,60 @@ def test_each_dag_is_triggered_by_hand_rather_than_on_a_schedule(path):
 
     assert isinstance(schedule, ast.Constant)
     assert schedule.value is None
+
+
+def test_every_seeded_dag_has_an_entry_in_the_answer_key():
+    # The accuracy number means nothing if a DAG can be added without anybody deciding
+    # what the right answer for it is.
+    from dag_doctor.evaluation.scenarios import SCENARIOS
+
+    assert {path.stem for path in DAG_FILES} == {scenario.dag_id for scenario in SCENARIOS}
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    __import__("dag_doctor.evaluation.scenarios", fromlist=["SCENARIOS"]).SCENARIOS,
+    ids=lambda s: s.dag_id,
+)
+def test_the_task_the_key_scores_actually_exists_in_the_dag(scenario):
+    # Scoring a task that is not in the DAG would silently score nothing at all.
+    source = (DAGS_DIR / f"{scenario.dag_id}.py").read_text()
+    task_ids = _task_ids(ast.parse(source))
+
+    assert scenario.failing_task in task_ids
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        s
+        for s in __import__("dag_doctor.evaluation.scenarios", fromlist=["SCENARIOS"]).SCENARIOS
+        if s.expected_responsible_task
+    ],
+    ids=lambda s: s.dag_id,
+)
+def test_the_task_the_key_blames_actually_exists_in_the_dag(scenario):
+    source = (DAGS_DIR / f"{scenario.dag_id}.py").read_text()
+    task_ids = _task_ids(ast.parse(source))
+
+    assert scenario.expected_responsible_task in task_ids
+    assert scenario.expected_responsible_task != scenario.failing_task
+
+
+def _task_ids(tree: ast.Module) -> set[str]:
+    """Every task_id declared in a DAG file."""
+    return {
+        keyword.value.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        for keyword in node.keywords
+        if keyword.arg == "task_id" and isinstance(keyword.value, ast.Constant)
+    }
+
+
+def test_only_the_transient_scenario_retries():
+    # Retrying a deterministic failure only delays the diagnosis. The transient one is
+    # the single case where retries belong, and its diagnosis should say so.
+    retrying = {path.stem for path in DAG_FILES if '"retries": 0' not in path.read_text()}
+
+    assert retrying == {"connection_timeout_api"}

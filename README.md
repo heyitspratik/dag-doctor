@@ -28,8 +28,9 @@ loops until a hypothesis survives its test or a budget is exhausted.
 ## Quickstart
 
 The stack runs end to end: a failure becomes an incident, the graph investigates it, and
-the diagnosis and its full trace are readable over HTTP. Six of the eight seeded scenarios
-and the evaluation harness are still to come.
+the diagnosis and its full trace are readable over HTTP. All eight scenarios are seeded
+and `make evaluate` scores them. No accuracy table is published yet, because no run has
+been performed; the Helm chart and the measured results are the remaining work.
 
 ```bash
 make dev                              # sync dependencies, install the pre-commit hooks
@@ -60,12 +61,30 @@ pin is the most common reason a cloned repository will not start.
 
 ### The seeded failures
 
+Eight scenarios, seeded so the repository demonstrates itself without you providing any
+data. They double as the evaluation set, and the answer key is a single readable table in
+[`evaluation/scenarios.py`](src/dag_doctor/evaluation/scenarios.py).
+
 | DAG | Failure | Correct diagnosis |
 |---|---|---|
 | `schema_drift_orders` | An upstream rename breaks a downstream aggregate | Schema drift, naming the changed column |
+| `null_explosion_customers` | A source column goes mostly null; a not-null constraint fails downstream | Data quality regression upstream, not a code bug |
+| `upstream_dependency_failure` | The real failure is two tasks upstream | Attribute it to the true upstream task, not the symptom |
+| `connection_timeout_api` | An external API times out | Transient infrastructure; retry policy, not a code change |
+| `bad_sql_join_explosion` | An accidental cartesian join runs away | Query defect; identify the join condition |
+| `stale_partition_missing` | The expected date partition never landed | Missing upstream data, not a pipeline defect |
+| `type_coercion_failure` | A string arrives where a numeric is expected | Type mismatch, naming the column |
 | `healthy_baseline` | None. The control | The agent must never be invoked |
 
-Six more scenarios land with the evaluation harness.
+```bash
+make evaluate    # triggers all eight, waits for diagnoses, prints the accuracy table
+```
+
+The harness reports **category accuracy** and **attribution accuracy** separately, because
+naming the right kind of failure while blaming the wrong task is not a correct diagnosis.
+An inconclusive answer scores as wrong. It also reports a calibration gap: mean confidence
+on wrong answers minus mean confidence on right ones, so an agent that is surest when it
+is wrong cannot hide behind a good average.
 
 ## Design notes
 

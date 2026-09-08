@@ -1,0 +1,76 @@
+name: Agent evaluation
+
+# Manual, not on every push. A full run brings up Airflow, Redpanda, Postgres and Ollama,
+# pulls a model, and waits for eight investigations to finish; running that on every
+# commit would make the pipeline useless for the thing pipelines are for.
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: The Ollama model to evaluate
+        default: llama3.2:3b
+        type: string
+      min_accuracy:
+        description: Fail the job below this category accuracy
+        default: "0.0"
+        type: string
+
+jobs:
+  evaluate:
+    name: Score the seeded scenarios
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Sync dependencies
+        run: uv sync --all-groups --frozen
+
+      - name: Bring up the stack
+        env:
+          OLLAMA_MODEL: ${{ inputs.model }}
+        run: make up
+
+      - name: Pull the model
+        env:
+          OLLAMA_MODEL: ${{ inputs.model }}
+        run: make pull-models
+
+      - name: Evaluate
+        env:
+          OLLAMA_MODEL: ${{ inputs.model }}
+        run: |
+          mkdir -p results
+          uv run python -m dag_doctor.evaluation.runner evaluate \
+            --model "${{ inputs.model }}" \
+            --output results/accuracy.md \
+            --min-accuracy "${{ inputs.min_accuracy }}"
+
+      - name: Publish the table as a job summary
+        if: always()
+        run: cat results/accuracy.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Keep the table as an artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: accuracy-${{ inputs.model }}
+          path: results/accuracy.md
+          if-no-files-found: warn
+
+      - name: Collect the logs if anything went wrong
+        if: failure()
+        run: docker compose -f docker/docker-compose.yml logs --tail 200
+
+      - name: Tear down
+        if: always()
+        run: make down

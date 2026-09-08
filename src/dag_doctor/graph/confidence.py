@@ -77,9 +77,30 @@ KNOWN_SIGNATURES: tuple[Signature, ...] = (
         strength=0.9,
     ),
     Signature(
+        name="query_timeout",
+        # Ordered before connection_failure on purpose. A query cancelled by a statement
+        # timeout is a runaway query, not a network problem, and the two need opposite
+        # fixes: rewrite the join, or retry with backoff.
+        pattern=re.compile(
+            r"canceling statement due to statement timeout|QueryCanceled"
+            r"|due to (?:statement|lock) timeout",
+            re.I,
+        ),
+        category=RootCauseCategory.QUERY_DEFECT,
+        strength=0.7,
+    ),
+    Signature(
+        name="duplicate_key",
+        pattern=re.compile(r"duplicate key value violates unique constraint|UniqueViolation", re.I),
+        category=RootCauseCategory.QUERY_DEFECT,
+        strength=0.7,
+    ),
+    Signature(
         name="connection_failure",
         pattern=re.compile(
-            r"connection refused|could not connect|timed? ?out|ConnectTimeout|ReadTimeout"
+            r"connection refused|could not connect|connection reset"
+            r"|ConnectTimeout|ReadTimeout|ConnectionError"
+            r"|timed out (?:connecting|reading|waiting)|connection timed out"
             r"|OperationalError.*server closed",
             re.I,
         ),
