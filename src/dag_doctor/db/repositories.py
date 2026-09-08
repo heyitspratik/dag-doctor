@@ -6,14 +6,21 @@ change without the investigation logic noticing, and it gives the tests one seam
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dag_doctor.core.exceptions import PersistenceError
 from dag_doctor.core.logging import get_logger
-from dag_doctor.core.models import FailureEvent, IncidentStatus
-from dag_doctor.db.models import Incident
+from dag_doctor.core.models import Diagnosis, FailureEvent, IncidentStatus
+from dag_doctor.db.models import (
+    DiagnosisRecord,
+    EvidenceRecord,
+    HypothesisRecord,
+    Incident,
+    InvestigationStep,
+)
+from dag_doctor.graph.state import InvestigationState
 
 logger = get_logger(__name__)
 
@@ -142,3 +149,235 @@ class IncidentRepository:
             task_id=incident.task_id,
         )
         return incident
+
+
+class InvestigationRepository:
+    """Writes and reads a whole investigation: its steps, evidence, hypotheses and result.
+
+    One repository rather than four, because these rows are only ever meaningful together.
+    Persisting them in a single unit of work means a crash halfway through leaves no
+    investigation at all rather than a diagnosis whose evidence is missing.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        """Initialise the repository.
+
+        Args:
+            session: The session for the current unit of work.
+        """
+        self._session = session
+
+    async def next_attempt(self, incident_id: UUID) -> int:
+        """The attempt number a new investigation of this incident should carry.
+
+        Args:
+            incident_id: The incident about to be investigated.
+
+        Returns:
+            One more than the highest attempt already recorded, or one.
+        """
+        highest = (
+            await self._session.execute(
+                select(func.max(DiagnosisRecord.attempt)).where(
+                    DiagnosisRecord.incident_id == incident_id
+                )
+            )
+        ).scalar_one_or_none()
+        return (highest or 0) + 1
+
+    async def save(self, state: InvestigationState, attempt: int) -> DiagnosisRecord | None:
+        """Persist a finished investigation.
+
+        Previous attempts are left alone. A replay is only useful next to the run it is
+        being compared with, so it is written beside the original rather than over it.
+
+        Args:
+            state: The investigation, at the point it reached a terminal node.
+            attempt: Which attempt this is for the incident.
+
+        Returns:
+            The stored diagnosis, or ``None`` if the investigation produced none.
+        """
+        offset = await self._sequence_offset(state.incident_id)
+        for step in state.steps:
+            self._session.add(
+                InvestigationStep(
+                    incident_id=state.incident_id,
+                    attempt=attempt,
+                    node=step.node,
+                    # Sequence stays unique per incident, so a replay continues the
+                    # numbering rather than colliding with the run before it.
+                    sequence=offset + step.sequence,
+                    input=dict(step.input),
+                    output=dict(step.output),
+                    duration_ms=step.duration_ms,
+                    prompt_tokens=step.prompt_tokens,
+                    completion_tokens=step.completion_tokens,
+                    model_used=step.model_used,
+                    started_at=step.started_at,
+                )
+            )
+
+        for item in state.evidence:
+            self._session.add(
+                EvidenceRecord(
+                    id=item.id,
+                    incident_id=state.incident_id,
+                    attempt=attempt,
+                    tool_name=item.tool_name,
+                    tool_input=dict(item.tool_input),
+                    result=dict(item.result),
+                    summary=item.summary,
+                    succeeded=item.succeeded,
+                    duration_ms=item.duration_ms,
+                    collected_at=item.collected_at,
+                )
+            )
+
+        for hypothesis in state.hypotheses:
+            self._session.add(
+                HypothesisRecord(
+                    id=hypothesis.id,
+                    incident_id=state.incident_id,
+                    attempt=attempt,
+                    statement=hypothesis.statement,
+                    root_cause_category=hypothesis.root_cause_category,
+                    proposed_test=hypothesis.proposed_test,
+                    test_call={
+                        "tool": hypothesis.test_tool,
+                        "arguments": dict(hypothesis.test_arguments),
+                    },
+                    outcome=hypothesis.outcome,
+                    rank=hypothesis.rank,
+                    test_notes=hypothesis.test_notes,
+                    supporting_evidence_ids=[
+                        str(item) for item in hypothesis.supporting_evidence_ids
+                    ],
+                    responsible_dag_id=hypothesis.responsible_dag_id,
+                    responsible_task_id=hypothesis.responsible_task_id,
+                    created_at=hypothesis.created_at,
+                )
+            )
+
+        record = None
+        if state.diagnosis is not None:
+            record = _to_record(state.diagnosis, attempt)
+            self._session.add(record)
+
+        await self._session.flush()
+        logger.info(
+            "investigation.persisted",
+            incident_id=str(state.incident_id),
+            attempt=attempt,
+            steps=len(state.steps),
+            evidence=len(state.evidence),
+            hypotheses=len(state.hypotheses),
+            diagnosed=record is not None,
+        )
+        return record
+
+    async def steps(self, incident_id: UUID, attempt: int | None = None) -> list[InvestigationStep]:
+        """The step trace, in order.
+
+        Args:
+            incident_id: The incident.
+            attempt: One attempt, or every attempt when omitted.
+
+        Returns:
+            The steps, ordered as they ran.
+        """
+        statement = (
+            select(InvestigationStep)
+            .where(InvestigationStep.incident_id == incident_id)
+            .order_by(InvestigationStep.attempt, InvestigationStep.sequence)
+        )
+        if attempt is not None:
+            statement = statement.where(InvestigationStep.attempt == attempt)
+        return list((await self._session.execute(statement)).scalars())
+
+    async def evidence(self, incident_id: UUID, attempt: int | None = None) -> list[EvidenceRecord]:
+        """Every piece of evidence gathered.
+
+        Args:
+            incident_id: The incident.
+            attempt: One attempt, or every attempt when omitted.
+
+        Returns:
+            The evidence, oldest first.
+        """
+        statement = (
+            select(EvidenceRecord)
+            .where(EvidenceRecord.incident_id == incident_id)
+            .order_by(EvidenceRecord.attempt, EvidenceRecord.collected_at)
+        )
+        if attempt is not None:
+            statement = statement.where(EvidenceRecord.attempt == attempt)
+        return list((await self._session.execute(statement)).scalars())
+
+    async def hypotheses(
+        self, incident_id: UUID, attempt: int | None = None
+    ) -> list[HypothesisRecord]:
+        """Every hypothesis considered, best-ranked first.
+
+        Args:
+            incident_id: The incident.
+            attempt: One attempt, or every attempt when omitted.
+
+        Returns:
+            The hypotheses, including the ones that were refuted.
+        """
+        statement = (
+            select(HypothesisRecord)
+            .where(HypothesisRecord.incident_id == incident_id)
+            .order_by(HypothesisRecord.attempt, HypothesisRecord.rank)
+        )
+        if attempt is not None:
+            statement = statement.where(HypothesisRecord.attempt == attempt)
+        return list((await self._session.execute(statement)).scalars())
+
+    async def latest_diagnosis(self, incident_id: UUID) -> DiagnosisRecord | None:
+        """The most recent attempt's diagnosis.
+
+        Args:
+            incident_id: The incident.
+
+        Returns:
+            The diagnosis, or ``None`` if the incident has never been diagnosed.
+        """
+        statement = (
+            select(DiagnosisRecord)
+            .where(DiagnosisRecord.incident_id == incident_id)
+            .order_by(DiagnosisRecord.attempt.desc())
+            .limit(1)
+        )
+        return (await self._session.execute(statement)).scalar_one_or_none()
+
+    async def _sequence_offset(self, incident_id: UUID) -> int:
+        """The highest step sequence already recorded for an incident."""
+        highest = (
+            await self._session.execute(
+                select(func.max(InvestigationStep.sequence)).where(
+                    InvestigationStep.incident_id == incident_id
+                )
+            )
+        ).scalar_one_or_none()
+        return highest or 0
+
+
+def _to_record(diagnosis: Diagnosis, attempt: int) -> DiagnosisRecord:
+    """Turn the domain diagnosis into its row."""
+    return DiagnosisRecord(
+        incident_id=diagnosis.incident_id,
+        attempt=attempt,
+        root_cause_category=diagnosis.root_cause_category,
+        summary=diagnosis.summary,
+        confidence=diagnosis.confidence,
+        halt_reason=diagnosis.halt_reason.value,
+        evidence_chain=[str(item) for item in diagnosis.evidence_chain],
+        proposed_fix=diagnosis.proposed_fix,
+        responsible_dag_id=diagnosis.responsible_dag_id,
+        responsible_task_id=diagnosis.responsible_task_id,
+        unknowns=list(diagnosis.unknowns),
+        model_used=diagnosis.model_used,
+        created_at=diagnosis.created_at,
+    )

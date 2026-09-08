@@ -2,6 +2,7 @@ import pytest
 
 from dag_doctor.core.exceptions import MessagingError
 from dag_doctor.messaging.producer import (
+    DiagnosisPublisher,
     FailurePublisher,
     publish_failure_event,
     publish_failure_event_blocking,
@@ -136,3 +137,61 @@ async def test_the_real_client_matches_the_protocol_this_package_relies_on(kafka
         assert {"topic", "value", "key"} <= set(sent)
     finally:
         await client.stop()
+
+
+async def test_a_diagnosis_is_announced_on_its_own_topic(kafka_settings, producer, failure_event):
+    from uuid import uuid4
+
+    from dag_doctor.core.models import Diagnosis, RootCauseCategory
+    from dag_doctor.messaging.producer import DiagnosisPublisher
+    from dag_doctor.messaging.schemas import DiagnosisCompletedMessage
+
+    diagnosis = Diagnosis(
+        incident_id=uuid4(),
+        root_cause_category=RootCauseCategory.SCHEMA_DRIFT,
+        summary="a column was renamed",
+        confidence=0.8,
+    )
+    message = DiagnosisCompletedMessage.from_diagnosis(
+        diagnosis, dag_id="d", task_id="t", run_id="r"
+    )
+
+    publisher = DiagnosisPublisher(kafka_settings, producer)
+    await publisher.start()
+    assert await publisher.publish(message) is True
+    await publisher.stop()
+
+    topic, value, key = producer.records[0]
+    assert topic == "agent.diagnosis.completed"
+    assert key == str(diagnosis.incident_id).encode()
+    assert DiagnosisCompletedMessage.model_validate_json(value).conclusive is True
+
+
+async def test_announcing_before_starting_is_reported_rather_than_raised(kafka_settings, producer):
+    from uuid import uuid4
+
+    from dag_doctor.core.models import Diagnosis, RootCauseCategory
+    from dag_doctor.messaging.producer import DiagnosisPublisher
+    from dag_doctor.messaging.schemas import DiagnosisCompletedMessage
+
+    message = DiagnosisCompletedMessage.from_diagnosis(
+        Diagnosis(
+            incident_id=uuid4(),
+            root_cause_category=RootCauseCategory.UNKNOWN,
+            summary="x",
+            confidence=0.1,
+        ),
+        dag_id="d",
+        task_id="t",
+        run_id="r",
+    )
+
+    assert await DiagnosisPublisher(kafka_settings, producer).publish(message) is False
+
+
+async def test_stopping_a_diagnosis_publisher_that_never_started_is_harmless(
+    kafka_settings, producer
+):
+    await DiagnosisPublisher(kafka_settings, producer).stop()
+
+    assert producer.stop_calls == 0

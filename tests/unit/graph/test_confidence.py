@@ -84,8 +84,8 @@ def test_triage_needs_both_a_pattern_and_an_agreeing_model():
     assert triage_confidence(None, model_agrees=True) == 0.0
 
 
-def test_an_investigation_that_found_nothing_scores_low(drift_failure, budgets):
-    breakdown = compute_confidence(_state(drift_failure, budgets))
+def test_an_investigation_that_found_nothing_scores_low(failure_event, budgets):
+    breakdown = compute_confidence(_state(failure_event, budgets))
 
     # The signature alone contributes; having merely run does not.
     assert breakdown.evidence_support == 0.0
@@ -93,12 +93,12 @@ def test_an_investigation_that_found_nothing_scores_low(drift_failure, budgets):
     assert breakdown.total < 0.4
 
 
-def test_repeating_one_tool_is_not_independent_support(drift_failure, budgets):
+def test_repeating_one_tool_is_not_independent_support(failure_event, budgets):
     # Three calls to one tool is one line of argument retold. Counting it as three would
     # let a confident investigation manufacture its own support.
-    repeated = _state(drift_failure, budgets, evidence=_evidence("fetch_task_logs") * 3)
+    repeated = _state(failure_event, budgets, evidence=_evidence("fetch_task_logs") * 3)
     varied = _state(
-        drift_failure,
+        failure_event,
         budgets,
         evidence=_evidence("fetch_task_logs", "compare_schema_snapshot", "get_dag_run_history"),
     )
@@ -108,30 +108,30 @@ def test_repeating_one_tool_is_not_independent_support(drift_failure, budgets):
     assert compute_confidence(varied).total > compute_confidence(repeated).total
 
 
-def test_a_tool_that_failed_does_not_support_a_conclusion(drift_failure, budgets):
-    state = _state(drift_failure, budgets, evidence=_evidence("profile_table", succeeded=False))
+def test_a_tool_that_failed_does_not_support_a_conclusion(failure_event, budgets):
+    state = _state(failure_event, budgets, evidence=_evidence("profile_table", succeeded=False))
 
     assert compute_confidence(state).evidence_support == 0.0
 
 
-def test_surviving_a_test_counts_for_more_than_never_being_tested(drift_failure, budgets):
+def test_surviving_a_test_counts_for_more_than_never_being_tested(failure_event, budgets):
     confirmed = _state(
-        drift_failure, budgets, current_hypothesis=_hypothesis(HypothesisOutcome.CONFIRMED)
+        failure_event, budgets, current_hypothesis=_hypothesis(HypothesisOutcome.CONFIRMED)
     )
     untested = _state(
-        drift_failure, budgets, current_hypothesis=_hypothesis(HypothesisOutcome.UNTESTED)
+        failure_event, budgets, current_hypothesis=_hypothesis(HypothesisOutcome.UNTESTED)
     )
 
     assert compute_confidence(confirmed).hypothesis_test > 0
     assert compute_confidence(untested).hypothesis_test == 0
 
 
-def test_a_test_that_decided_nothing_counts_for_a_little(drift_failure, budgets):
+def test_a_test_that_decided_nothing_counts_for_a_little(failure_event, budgets):
     inconclusive = _state(
-        drift_failure, budgets, current_hypothesis=_hypothesis(HypothesisOutcome.INCONCLUSIVE)
+        failure_event, budgets, current_hypothesis=_hypothesis(HypothesisOutcome.INCONCLUSIVE)
     )
     confirmed = _state(
-        drift_failure, budgets, current_hypothesis=_hypothesis(HypothesisOutcome.CONFIRMED)
+        failure_event, budgets, current_hypothesis=_hypothesis(HypothesisOutcome.CONFIRMED)
     )
 
     score = compute_confidence(inconclusive).hypothesis_test
@@ -139,16 +139,16 @@ def test_a_test_that_decided_nothing_counts_for_a_little(drift_failure, budgets)
 
 
 def test_a_cause_found_on_the_fourth_attempt_is_worth_less_than_one_found_first(
-    drift_failure, budgets
+    failure_event, budgets
 ):
     first = _state(
-        drift_failure,
+        failure_event,
         budgets,
         current_hypothesis=_hypothesis(HypothesisOutcome.CONFIRMED),
         hypotheses=[_hypothesis(HypothesisOutcome.CONFIRMED)],
     )
     fourth = _state(
-        drift_failure,
+        failure_event,
         budgets,
         current_hypothesis=_hypothesis(HypothesisOutcome.CONFIRMED),
         hypotheses=[_hypothesis(HypothesisOutcome.REFUTED) for _ in range(3)],
@@ -157,9 +157,9 @@ def test_a_cause_found_on_the_fourth_attempt_is_worth_less_than_one_found_first(
     assert compute_confidence(fourth).total < compute_confidence(first).total
 
 
-def test_the_refutation_penalty_is_capped(drift_failure, budgets):
+def test_the_refutation_penalty_is_capped(failure_event, budgets):
     many = _state(
-        drift_failure,
+        failure_event,
         budgets,
         hypotheses=[_hypothesis(HypothesisOutcome.REFUTED) for _ in range(20)],
     )
@@ -167,9 +167,9 @@ def test_the_refutation_penalty_is_capped(drift_failure, budgets):
     assert compute_confidence(many).refutation_penalty == -0.15
 
 
-def test_a_thorough_investigation_that_confirms_its_hypothesis_scores_high(drift_failure, budgets):
+def test_a_thorough_investigation_that_confirms_its_hypothesis_scores_high(failure_event, budgets):
     state = _state(
-        drift_failure,
+        failure_event,
         budgets,
         current_hypothesis=_hypothesis(HypothesisOutcome.CONFIRMED),
         hypotheses=[_hypothesis(HypothesisOutcome.CONFIRMED)],
@@ -181,9 +181,9 @@ def test_a_thorough_investigation_that_confirms_its_hypothesis_scores_high(drift
     assert compute_confidence(state).total > 0.9
 
 
-def test_confidence_never_leaves_the_unit_interval(drift_failure, budgets):
+def test_confidence_never_leaves_the_unit_interval(failure_event, budgets):
     state = _state(
-        drift_failure,
+        failure_event,
         budgets,
         current_hypothesis=_hypothesis(HypothesisOutcome.CONFIRMED),
         evidence=_evidence(*[f"tool_{index}" for index in range(50)]),
@@ -192,9 +192,9 @@ def test_confidence_never_leaves_the_unit_interval(drift_failure, budgets):
     assert 0.0 <= compute_confidence(state).total <= 1.0
 
 
-def test_the_breakdown_shows_its_working(drift_failure, budgets):
+def test_the_breakdown_shows_its_working(failure_event, budgets):
     # A number nobody can argue with is a number nobody should trust.
-    explanation = compute_confidence(_state(drift_failure, budgets)).explain()
+    explanation = compute_confidence(_state(failure_event, budgets)).explain()
 
     assert f"{BASE_CONFIDENCE:.2f} base" in explanation
     assert "signature" in explanation

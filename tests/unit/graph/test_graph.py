@@ -15,8 +15,7 @@ from dag_doctor.core.models import HaltReason, HypothesisOutcome, RootCauseCateg
 from dag_doctor.core.settings import BudgetSettings
 from dag_doctor.graph.builder import build_graph, initial_state
 from dag_doctor.graph.state import InvestigationState
-
-from .conftest import (
+from tests.fakes import (
     ScriptedCaller,
     conclusion,
     hypothesis_set,
@@ -43,7 +42,7 @@ def _full_script(*, outcome: str = "confirmed") -> dict[str, list]:
 
 
 async def test_an_unmistakable_failure_concludes_straight_from_triage(
-    toolbox, budgets, drift_failure
+    toolbox, budgets, failure_event
 ):
     caller = ScriptedCaller(
         {
@@ -52,7 +51,7 @@ async def test_an_unmistakable_failure_concludes_straight_from_triage(
         }
     )
 
-    state = await _run(caller, toolbox, budgets, drift_failure)
+    state = await _run(caller, toolbox, budgets, failure_event)
 
     assert state.diagnosis is not None
     assert state.diagnosis.is_conclusive
@@ -60,10 +59,10 @@ async def test_an_unmistakable_failure_concludes_straight_from_triage(
     assert [step.node for step in state.steps] == ["triage", "conclude"]
 
 
-async def test_the_ordinary_path_gathers_forms_tests_and_concludes(toolbox, budgets, drift_failure):
+async def test_the_ordinary_path_gathers_forms_tests_and_concludes(toolbox, budgets, failure_event):
     caller = ScriptedCaller(_full_script())
 
-    state = await _run(caller, toolbox, budgets, drift_failure)
+    state = await _run(caller, toolbox, budgets, failure_event)
 
     assert [step.node for step in state.steps] == [
         "triage",
@@ -79,7 +78,7 @@ async def test_the_ordinary_path_gathers_forms_tests_and_concludes(toolbox, budg
 
 
 async def test_a_refuted_hypothesis_sends_the_investigation_round_again(
-    toolbox, budgets, drift_failure
+    toolbox, budgets, failure_event
 ):
     # The loop, end to end. A chain could not express this, which is the honest
     # justification for building the investigation as a state machine.
@@ -96,7 +95,7 @@ async def test_a_refuted_hypothesis_sends_the_investigation_round_again(
         }
     )
 
-    state = await _run(caller, toolbox, budgets, drift_failure)
+    state = await _run(caller, toolbox, budgets, failure_event)
 
     assert caller.call_count("gather_evidence") == 2
     assert [step.node for step in state.steps] == [
@@ -114,7 +113,7 @@ async def test_a_refuted_hypothesis_sends_the_investigation_round_again(
     assert state.diagnosis.is_conclusive
 
 
-async def test_a_refuted_hypothesis_is_not_proposed_again(toolbox, budgets, drift_failure):
+async def test_a_refuted_hypothesis_is_not_proposed_again(toolbox, budgets, failure_event):
     caller = ScriptedCaller(
         {
             "triage": [triage_answer()],
@@ -128,12 +127,12 @@ async def test_a_refuted_hypothesis_is_not_proposed_again(toolbox, budgets, drif
         }
     )
 
-    await _run(caller, toolbox, budgets, drift_failure)
+    await _run(caller, toolbox, budgets, failure_event)
 
     assert "the warehouse was unreachable" in caller.prompt_for("form_hypothesis")
 
 
-async def test_running_out_of_iterations_produces_an_inconclusive_diagnosis(toolbox, drift_failure):
+async def test_running_out_of_iterations_produces_an_inconclusive_diagnosis(toolbox, failure_event):
     # A budget that runs out is an ordinary outcome recorded honestly, not a crash and
     # not a guess dressed up as an answer.
     budgets = BudgetSettings(max_iterations=2)
@@ -146,7 +145,7 @@ async def test_running_out_of_iterations_produces_an_inconclusive_diagnosis(tool
         }
     )
 
-    state = await _run(caller, toolbox, budgets, drift_failure)
+    state = await _run(caller, toolbox, budgets, failure_event)
 
     assert state.halt_reason is HaltReason.ITERATION_BUDGET_EXHAUSTED
     assert state.diagnosis is not None
@@ -155,7 +154,7 @@ async def test_running_out_of_iterations_produces_an_inconclusive_diagnosis(tool
     assert caller.call_count("conclude") == 0
 
 
-async def test_running_out_of_tool_calls_produces_an_inconclusive_diagnosis(toolbox, drift_failure):
+async def test_running_out_of_tool_calls_produces_an_inconclusive_diagnosis(toolbox, failure_event):
     budgets = BudgetSettings(max_tool_calls=2)
     caller = ScriptedCaller(
         {
@@ -166,14 +165,14 @@ async def test_running_out_of_tool_calls_produces_an_inconclusive_diagnosis(tool
         }
     )
 
-    state = await _run(caller, toolbox, budgets, drift_failure)
+    state = await _run(caller, toolbox, budgets, failure_event)
 
     assert state.halt_reason is HaltReason.TOOL_CALL_BUDGET_EXHAUSTED
     assert state.diagnosis is not None
     assert not state.diagnosis.is_conclusive
 
 
-async def test_an_exhausted_budget_says_which_knob_to_turn(toolbox, drift_failure):
+async def test_an_exhausted_budget_says_which_knob_to_turn(toolbox, failure_event):
     budgets = BudgetSettings(max_iterations=2)
     caller = ScriptedCaller(
         {
@@ -184,12 +183,12 @@ async def test_an_exhausted_budget_says_which_knob_to_turn(toolbox, drift_failur
         }
     )
 
-    state = await _run(caller, toolbox, budgets, drift_failure)
+    state = await _run(caller, toolbox, budgets, failure_event)
 
     assert any("MAX_ITERATIONS" in unknown for unknown in state.diagnosis.unknowns)
 
 
-async def test_an_inconclusive_diagnosis_still_reports_what_was_found(toolbox, drift_failure):
+async def test_an_inconclusive_diagnosis_still_reports_what_was_found(toolbox, failure_event):
     budgets = BudgetSettings(max_iterations=2)
     caller = ScriptedCaller(
         {
@@ -200,13 +199,13 @@ async def test_an_inconclusive_diagnosis_still_reports_what_was_found(toolbox, d
         }
     )
 
-    state = await _run(caller, toolbox, budgets, drift_failure)
+    state = await _run(caller, toolbox, budgets, failure_event)
 
     assert "Ruled out: a column was renamed" in state.diagnosis.summary
     assert state.diagnosis.evidence_chain
 
 
-async def test_forming_no_hypothesis_escalates_rather_than_looping(toolbox, budgets, drift_failure):
+async def test_forming_no_hypothesis_escalates_rather_than_looping(toolbox, budgets, failure_event):
     from dag_doctor.graph.nodes.form_hypothesis import HypothesisSet
 
     caller = ScriptedCaller(
@@ -217,7 +216,7 @@ async def test_forming_no_hypothesis_escalates_rather_than_looping(toolbox, budg
         }
     )
 
-    state = await _run(caller, toolbox, budgets, drift_failure)
+    state = await _run(caller, toolbox, budgets, failure_event)
 
     assert state.halt_reason is HaltReason.NO_HYPOTHESIS_FORMED
     assert state.diagnosis is not None
@@ -225,14 +224,14 @@ async def test_forming_no_hypothesis_escalates_rather_than_looping(toolbox, budg
 
 
 async def test_a_provider_outage_halts_rather_than_stranding_the_incident(
-    toolbox, budgets, drift_failure
+    toolbox, budgets, failure_event
 ):
     # An exception escaping the graph would leave the incident stuck in investigating
     # with nothing to show. A halt produces a diagnosis saying what went wrong.
     caller = ScriptedCaller(_full_script())
     caller.fail_at("form_hypothesis", ProviderUnavailableError("ollama is down"))
 
-    state = await _run(caller, toolbox, budgets, drift_failure)
+    state = await _run(caller, toolbox, budgets, failure_event)
 
     assert state.halt_reason is HaltReason.INVESTIGATION_ERROR
     assert state.diagnosis is not None
@@ -241,7 +240,7 @@ async def test_a_provider_outage_halts_rather_than_stranding_the_incident(
 
 
 async def test_a_tool_that_cannot_answer_is_recorded_rather_than_fatal(
-    toolbox, budgets, drift_failure
+    toolbox, budgets, failure_event
 ):
     caller = ScriptedCaller(
         {
@@ -250,7 +249,7 @@ async def test_a_tool_that_cannot_answer_is_recorded_rather_than_fatal(
         }
     )
 
-    state = await _run(caller, toolbox, budgets, drift_failure)
+    state = await _run(caller, toolbox, budgets, failure_event)
 
     assert [item.succeeded for item in state.evidence[:2]] == [False, True]
     assert state.diagnosis is not None
@@ -258,20 +257,20 @@ async def test_a_tool_that_cannot_answer_is_recorded_rather_than_fatal(
 
 
 async def test_a_tool_the_model_invented_is_recorded_rather_than_fatal(
-    toolbox, budgets, drift_failure
+    toolbox, budgets, failure_event
 ):
     caller = ScriptedCaller(
         {**_full_script(), "gather_evidence": [tool_plan("read_the_engineers_mind")]}
     )
 
-    state = await _run(caller, toolbox, budgets, drift_failure)
+    state = await _run(caller, toolbox, budgets, failure_event)
 
     assert state.evidence[0].succeeded is False
     assert "no tool named" in state.evidence[0].summary
     assert state.diagnosis is not None
 
 
-async def test_more_calls_than_the_budget_allows_are_not_made(toolbox, drift_failure):
+async def test_more_calls_than_the_budget_allows_are_not_made(toolbox, failure_event):
     budgets = BudgetSettings(max_tool_calls=2)
     caller = ScriptedCaller(
         {
@@ -289,27 +288,27 @@ async def test_more_calls_than_the_budget_allows_are_not_made(toolbox, drift_fai
         }
     )
 
-    state = await _run(caller, toolbox, budgets, drift_failure)
+    state = await _run(caller, toolbox, budgets, failure_event)
 
     assert state.tool_calls_made == 2
 
 
-async def test_every_node_leaves_a_step_in_the_trace(toolbox, budgets, drift_failure):
+async def test_every_node_leaves_a_step_in_the_trace(toolbox, budgets, failure_event):
     # The trace is what turns the agent from a black box into something auditable, and
     # it is the endpoint worth demonstrating.
     caller = ScriptedCaller(_full_script())
 
-    state = await _run(caller, toolbox, budgets, drift_failure)
+    state = await _run(caller, toolbox, budgets, failure_event)
 
     assert [step.sequence for step in state.steps] == [1, 2, 3, 4, 5]
     assert all(step.duration_ms >= 0 for step in state.steps)
     assert all(step.model_used == "scripted-model" for step in state.steps[:-1])
 
 
-async def test_the_trace_records_what_each_node_decided(toolbox, budgets, drift_failure):
+async def test_the_trace_records_what_each_node_decided(toolbox, budgets, failure_event):
     caller = ScriptedCaller(_full_script())
 
-    state = await _run(caller, toolbox, budgets, drift_failure)
+    state = await _run(caller, toolbox, budgets, failure_event)
 
     by_node = {step.node: step for step in state.steps}
     assert by_node["gather_evidence"].output["ran"] == [
@@ -320,19 +319,19 @@ async def test_the_trace_records_what_each_node_decided(toolbox, budgets, drift_
     assert "signature" in by_node["conclude"].output["confidence_breakdown"]
 
 
-async def test_token_spend_is_recorded_per_node(toolbox, budgets, drift_failure):
+async def test_token_spend_is_recorded_per_node(toolbox, budgets, failure_event):
     caller = ScriptedCaller(_full_script())
 
-    state = await _run(caller, toolbox, budgets, drift_failure)
+    state = await _run(caller, toolbox, budgets, failure_event)
 
     model_steps = [step for step in state.steps if step.model_used]
     assert all(step.prompt_tokens == 11 for step in model_steps)
 
 
-async def test_the_hypothesis_is_marked_tested_in_the_record(toolbox, budgets, drift_failure):
+async def test_the_hypothesis_is_marked_tested_in_the_record(toolbox, budgets, failure_event):
     caller = ScriptedCaller(_full_script())
 
-    state = await _run(caller, toolbox, budgets, drift_failure)
+    state = await _run(caller, toolbox, budgets, failure_event)
 
     assert state.hypotheses[0].outcome is HypothesisOutcome.CONFIRMED
     assert state.hypotheses[0].test_notes
@@ -340,7 +339,7 @@ async def test_the_hypothesis_is_marked_tested_in_the_record(toolbox, budgets, d
 
 @pytest.mark.parametrize("outcome", ["refuted", "inconclusive"])
 async def test_a_hypothesis_that_did_not_survive_never_reaches_a_conclusion(
-    toolbox, drift_failure, outcome
+    toolbox, failure_event, outcome
 ):
     budgets = BudgetSettings(max_iterations=1)
     caller = ScriptedCaller(
@@ -352,7 +351,7 @@ async def test_a_hypothesis_that_did_not_survive_never_reaches_a_conclusion(
         }
     )
 
-    state = await _run(caller, toolbox, budgets, drift_failure)
+    state = await _run(caller, toolbox, budgets, failure_event)
 
     assert caller.call_count("conclude") == 0
     assert not state.diagnosis.is_conclusive

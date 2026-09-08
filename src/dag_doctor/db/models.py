@@ -139,6 +139,10 @@ class Incident(Base):
 class InvestigationStep(Base):
     """One node execution, with its inputs, outputs, and cost.
 
+    ``attempt`` distinguishes replays. Re-running a past incident against a changed prompt
+    is the main thing the event log buys, and it is worth nothing if the second run
+    overwrites the first rather than sitting beside it for comparison.
+
     This is what turns the agent from a black box into something inspectable, and it is
     what the /investigation endpoint serves.
     """
@@ -153,6 +157,7 @@ class InvestigationStep(Base):
     incident_id: Mapped[UUID] = mapped_column(
         UUIDColumn, ForeignKey("incidents.id", ondelete="CASCADE")
     )
+    attempt: Mapped[int] = mapped_column(Integer, default=1)
     node: Mapped[str] = mapped_column(String(50))
     sequence: Mapped[int] = mapped_column(Integer)
     input: Mapped[dict[str, object]] = mapped_column(JSONColumn, default=dict)
@@ -176,6 +181,7 @@ class EvidenceRecord(Base):
     incident_id: Mapped[UUID] = mapped_column(
         UUIDColumn, ForeignKey("incidents.id", ondelete="CASCADE")
     )
+    attempt: Mapped[int] = mapped_column(Integer, default=1)
     tool_name: Mapped[str] = mapped_column(String(80))
     tool_input: Mapped[dict[str, object]] = mapped_column(JSONColumn, default=dict)
     result: Mapped[dict[str, object]] = mapped_column(JSONColumn, default=dict)
@@ -197,6 +203,7 @@ class HypothesisRecord(Base):
     incident_id: Mapped[UUID] = mapped_column(
         UUIDColumn, ForeignKey("incidents.id", ondelete="CASCADE")
     )
+    attempt: Mapped[int] = mapped_column(Integer, default=1)
     statement: Mapped[str] = mapped_column(Text)
     root_cause_category: Mapped[RootCauseCategory] = mapped_column(
         Enum(
@@ -236,6 +243,7 @@ class DiagnosisRecord(Base):
     __table_args__ = (
         CheckConstraint("confidence >= 0.0 AND confidence <= 1.0", name="ck_confidence_range"),
         Index("ix_diagnoses_incident", "incident_id"),
+        Index("ix_diagnoses_incident_attempt", "incident_id", "attempt"),
         Index("ix_diagnoses_category", "root_cause_category"),
     )
 
@@ -251,6 +259,7 @@ class DiagnosisRecord(Base):
             values_callable=_enum_values,
         )
     )
+    attempt: Mapped[int] = mapped_column(Integer, default=1)
     summary: Mapped[str] = mapped_column(Text)
     confidence: Mapped[float] = mapped_column()
     halt_reason: Mapped[str] = mapped_column(String(50))

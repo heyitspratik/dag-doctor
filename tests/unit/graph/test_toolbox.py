@@ -1,7 +1,6 @@
 from dag_doctor.core.exceptions import UnknownToolError
 from dag_doctor.graph.toolbox import Toolbox
-
-from .conftest import make_tool
+from tests.fakes import make_tool
 
 
 async def test_a_tool_result_becomes_evidence(toolbox):

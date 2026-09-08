@@ -16,7 +16,7 @@ from typing import Self
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from dag_doctor.core.exceptions import InvalidFailureEventError
-from dag_doctor.core.models import FailureEvent
+from dag_doctor.core.models import Diagnosis, FailureEvent, HaltReason, RootCauseCategory
 
 #: Bumped when the payload changes shape incompatibly. Consumers refuse a version they do
 #: not understand rather than silently misreading a field that has moved.
@@ -147,4 +147,57 @@ class DeadLetterMessage(BaseModel):
 
     def to_bytes(self) -> bytes:
         """Serialise to the JSON payload that goes on the dead-letter topic."""
+        return self.model_dump_json().encode()
+
+
+class DiagnosisCompletedMessage(BaseModel):
+    """One message on ``agent.diagnosis.completed``.
+
+    Deliberately thin. This topic exists so that other consumers, alerting, metrics, a
+    ticket opener, can react without touching the agent, and none of them need the whole
+    evidence chain. Anything that does can follow the incident id to the API.
+    """
+
+    schema_version: int = SCHEMA_VERSION
+    incident_id: str
+    dag_id: str
+    task_id: str
+    run_id: str
+    attempt: int = 1
+    root_cause_category: RootCauseCategory
+    confidence: float
+    halt_reason: HaltReason
+    conclusive: bool
+    responsible_dag_id: str | None = None
+    responsible_task_id: str | None = None
+    model_used: str = ""
+    completed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @classmethod
+    def from_diagnosis(
+        cls, diagnosis: Diagnosis, *, dag_id: str, task_id: str, run_id: str, attempt: int = 1
+    ) -> Self:
+        """Build the message announcing a finished investigation."""
+        return cls(
+            incident_id=str(diagnosis.incident_id),
+            dag_id=dag_id,
+            task_id=task_id,
+            run_id=run_id,
+            attempt=attempt,
+            root_cause_category=diagnosis.root_cause_category,
+            confidence=diagnosis.confidence,
+            halt_reason=diagnosis.halt_reason,
+            conclusive=diagnosis.is_conclusive,
+            responsible_dag_id=diagnosis.responsible_dag_id,
+            responsible_task_id=diagnosis.responsible_task_id,
+            model_used=diagnosis.model_used,
+        )
+
+    @property
+    def partition_key(self) -> bytes:
+        """Keyed by incident, so every attempt at one incident stays in order."""
+        return self.incident_id.encode()
+
+    def to_bytes(self) -> bytes:
+        """Serialise to the JSON payload that goes on the topic."""
         return self.model_dump_json().encode()

@@ -1,11 +1,12 @@
-"""The worker entrypoint: consume failures, persist incidents.
+"""The worker entrypoint: consume failures, investigate them, persist the result.
 
-The handler is deliberately one unit of work per message. The database transaction commits
-first and the Kafka offset second, so the only possible inconsistency is a message
-processed twice, which the incident's unique constraint absorbs. The reverse order would
-allow a failure to be acknowledged and then lost.
+The handler is deliberately one unit of work per message. Everything is written before the
+Kafka offset moves, so the only possible inconsistency is a message processed twice, which
+the incident's unique constraint absorbs. The reverse order would allow a failure to be
+acknowledged and then lost.
 
-Running the investigation graph is not wired in yet; that arrives with the graph itself.
+A failure that has already been diagnosed is not investigated again on redelivery: the
+answer would be the same and the model would be paid for it twice.
 """
 
 import asyncio
@@ -19,7 +20,13 @@ from dag_doctor.core.models import FailureEvent
 from dag_doctor.core.settings import Settings, get_settings
 from dag_doctor.db.repositories import IncidentRepository
 from dag_doctor.db.session import build_engine, build_session_factory, session_scope
+from dag_doctor.graph.model import LangChainCaller
+from dag_doctor.graph.toolbox import Toolbox
 from dag_doctor.messaging.consumer import FailureConsumer
+from dag_doctor.messaging.producer import DiagnosisPublisher
+from dag_doctor.tools.connections import ConnectionRegistry
+from dag_doctor.tools.factory import build_tools
+from dag_doctor.worker.investigator import Investigator
 
 logger = get_logger(__name__)
 
@@ -27,7 +34,9 @@ logger = get_logger(__name__)
 def build_handler(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> Callable[[FailureEvent], Awaitable[None]]:
-    """Build the handler that turns a failure event into a persisted incident.
+    """Build a handler that records a failure as an incident and nothing more.
+
+    Used where the graph is not wanted, such as an ingest-only deployment.
 
     Args:
         session_factory: Where each message's unit of work gets its session.
@@ -45,6 +54,27 @@ def build_handler(
     return handle
 
 
+def build_investigating_handler(
+    investigator: Investigator,
+) -> Callable[[FailureEvent], Awaitable[None]]:
+    """Build the handler the worker actually runs: record, then investigate.
+
+    Anything the investigation raises propagates, so the consumer retries the message and
+    then dead-letters it rather than committing past an incident it never diagnosed.
+
+    Args:
+        investigator: The service that runs the graph and persists its result.
+
+    Returns:
+        The handler to hand to the consumer.
+    """
+
+    async def handle(event: FailureEvent) -> None:
+        await investigator.handle(event)
+
+    return handle
+
+
 async def run_worker(settings: Settings | None = None) -> None:
     """Run the consumer until the process is asked to stop.
 
@@ -55,14 +85,26 @@ async def run_worker(settings: Settings | None = None) -> None:
     configure_logging(settings.app_env, settings.log_level)
 
     engine = build_engine(settings.db)
-    consumer = FailureConsumer(settings.kafka, build_handler(build_session_factory(engine)))
-    _install_signal_handlers(consumer)
+    session_factory = build_session_factory(engine)
+    connections = ConnectionRegistry.from_settings(settings)
+    toolbox = Toolbox(build_tools(settings, session_factory, connections))
 
-    try:
-        async with consumer:
-            await consumer.run()
-    finally:
-        await engine.dispose()
+    async with LangChainCaller(settings.llm) as caller:
+        investigator = Investigator(
+            settings,
+            session_factory,
+            caller,
+            toolbox,
+            DiagnosisPublisher(settings.kafka),
+        )
+        consumer = FailureConsumer(settings.kafka, build_investigating_handler(investigator))
+        _install_signal_handlers(consumer)
+        try:
+            async with investigator, consumer:
+                await consumer.run()
+        finally:
+            await connections.dispose()
+            await engine.dispose()
 
 
 def _install_signal_handlers(consumer: FailureConsumer) -> None:

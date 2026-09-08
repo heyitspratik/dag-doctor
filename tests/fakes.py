@@ -1,25 +1,22 @@
-"""A scripted model and stub tools, so the whole graph runs with no network at all.
+"""Fakes shared by the graph and worker suites.
 
 This is the mechanism the build spec asks for: every node reaches a model through one
 interface, and here that interface hands back prepared answers. Routing, the loop and
 budget enforcement are therefore checked against the real nodes and the real edges, with
-only the model and the tools replaced.
+only the model and the tools replaced. Nothing here touches a network.
 """
 
 from collections.abc import Mapping, Sequence
 
-import pytest
 from pydantic import BaseModel
 
-from dag_doctor.core.models import FailureEvent, NodeName, RootCauseCategory
-from dag_doctor.core.settings import BudgetSettings
+from dag_doctor.core.models import NodeName, RootCauseCategory
 from dag_doctor.graph.model import ModelCall
 from dag_doctor.graph.nodes.conclude import Conclusion
 from dag_doctor.graph.nodes.form_hypothesis import HypothesisSet, ProposedHypothesis
 from dag_doctor.graph.nodes.gather_evidence import PlannedCall, ToolPlan
 from dag_doctor.graph.nodes.test_hypothesis import TestVerdict
 from dag_doctor.graph.nodes.triage import TriageAnswer
-from dag_doctor.graph.toolbox import Toolbox
 from dag_doctor.tools.base import BaseTool, ToolInput, ToolOutput
 
 
@@ -105,39 +102,6 @@ def make_tool(name: str, finding: str, *, fails: bool = False) -> BaseTool[StubI
     Stub.name = name  # type: ignore[misc]
     Stub.description = f"Stub tool {name} used by the graph tests."  # type: ignore[misc]
     return Stub()
-
-
-DRIFT_FINDING = "orders.customer_id appears to have been renamed to customer_uuid"
-
-
-@pytest.fixture
-def toolbox() -> Toolbox:
-    return Toolbox(
-        [
-            make_tool("fetch_task_logs", "UndefinedColumn: column customer_id does not exist"),
-            make_tool("compare_schema_snapshot", DRIFT_FINDING),
-            make_tool("get_dag_run_history", "newly failing: 1 of the last 11 runs failed"),
-            make_tool("check_connection_health", "connection answered in 3ms"),
-            make_tool("profile_table", "unavailable", fails=True),
-        ]
-    )
-
-
-@pytest.fixture
-def budgets() -> BudgetSettings:
-    return BudgetSettings()
-
-
-@pytest.fixture
-def drift_failure() -> FailureEvent:
-    return FailureEvent(
-        dag_id="schema_drift_orders",
-        task_id="build_orders_by_customer",
-        run_id="manual__2026-09-07T10:00:00+00:00",
-        try_number=1,
-        exception_type="psycopg2.errors.UndefinedColumn",
-        exception_message='column "customer_id" does not exist',
-    )
 
 
 def triage_answer(

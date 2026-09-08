@@ -27,8 +27,9 @@ loops until a hypothesis survives its test or a budget is exhausted.
 
 ## Quickstart
 
-The graph is built and tested, but the worker does not run it yet, so the stack
-currently ends at "a failure becomes an incident row".
+The worker now investigates: a failure becomes an incident, the graph runs, and the
+diagnosis and its full step trace are persisted. There is no HTTP API yet, so reading a
+diagnosis means querying Postgres or watching the logs.
 
 ```bash
 make dev                              # sync dependencies, install the pre-commit hooks
@@ -36,6 +37,7 @@ make check                            # lint, type-check, unit tests
 make up                               # postgres, redpanda, ollama, airflow, the worker
 make seed-failures                    # trigger every seeded DAG
 make topic-tail                       # see the failure events on airflow.task.failed
+make logs                             # watch the worker diagnose them
 ```
 
 Airflow is at http://localhost:8080 (`airflow` / `airflow`). `schema_drift_orders` fails

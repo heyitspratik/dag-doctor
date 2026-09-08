@@ -13,7 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from dag_doctor.core import settings as settings_module
 from dag_doctor.core.models import FailureEvent
+from dag_doctor.core.settings import BudgetSettings
 from dag_doctor.db.models import Base
+from dag_doctor.graph.toolbox import Toolbox
+from tests.fakes import make_tool
 
 #: Environment variables the settings classes read. A developer's shell, or the .env file
 #: sitting in the repository root, must never be able to make a test pass or fail.
@@ -90,3 +93,26 @@ def failure_event() -> FailureEvent:
         exception_type="UndefinedColumn",
         exception_message='column "customer_id" does not exist',
     )
+
+
+#: What the seeded schema-drift scenario's tools would report, used across the suites.
+DRIFT_FINDING = "orders.customer_id appears to have been renamed to customer_uuid"
+
+
+@pytest.fixture
+def toolbox() -> Toolbox:
+    """Stub tools covering a success, a refusal, and everything in between."""
+    return Toolbox(
+        [
+            make_tool("fetch_task_logs", "UndefinedColumn: column customer_id does not exist"),
+            make_tool("compare_schema_snapshot", DRIFT_FINDING),
+            make_tool("get_dag_run_history", "newly failing: 1 of the last 11 runs failed"),
+            make_tool("check_connection_health", "connection answered in 3ms"),
+            make_tool("profile_table", "unavailable", fails=True),
+        ]
+    )
+
+
+@pytest.fixture
+def budgets() -> BudgetSettings:
+    return BudgetSettings()

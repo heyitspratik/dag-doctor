@@ -13,7 +13,7 @@ from dag_doctor.core.exceptions import MessagingError
 from dag_doctor.core.logging import get_logger
 from dag_doctor.core.models import FailureEvent
 from dag_doctor.core.settings import KafkaSettings
-from dag_doctor.messaging.schemas import TaskFailureMessage
+from dag_doctor.messaging.schemas import DiagnosisCompletedMessage, TaskFailureMessage
 
 logger = get_logger(__name__)
 
@@ -180,3 +180,71 @@ def publish_failure_event_blocking(
         asyncio.run(publish_failure_event(event, settings, producer))
         return
     raise MessagingError("publish_failure_event_blocking called from a running event loop")
+
+
+class DiagnosisPublisher:
+    """Announces finished investigations on the diagnosis topic.
+
+    Publishing failures here would be pointless, so it does not: a diagnosis that could
+    not be announced is logged and the investigation still counts as done. The record of
+    it is already in the database, which is the copy that matters.
+    """
+
+    def __init__(self, settings: KafkaSettings, producer: AsyncProducer | None = None) -> None:
+        """Initialise the publisher.
+
+        Args:
+            settings: Broker address and topic names.
+            producer: Injected in tests; the real client is built lazily otherwise.
+        """
+        self._settings = settings
+        self._producer = producer
+        self._started = False
+
+    async def start(self) -> None:
+        """Connect to the broker."""
+        if self._started:
+            return
+        if self._producer is None:
+            self._producer = _build_aiokafka_producer(self._settings)
+        await self._producer.start()
+        self._started = True
+
+    async def stop(self) -> None:
+        """Flush and disconnect, tolerating a publisher that never started."""
+        if self._producer is not None and self._started:
+            await self._producer.stop()
+        self._started = False
+
+    async def publish(self, message: DiagnosisCompletedMessage) -> bool:
+        """Announce one finished investigation.
+
+        Args:
+            message: What to announce.
+
+        Returns:
+            Whether the broker accepted it. A false here is not a failed investigation.
+        """
+        if self._producer is None or not self._started:
+            logger.warning("diagnosis.publisher_not_started", incident_id=message.incident_id)
+            return False
+        try:
+            await self._producer.send_and_wait(
+                self._settings.topic_diagnoses,
+                value=message.to_bytes(),
+                key=message.partition_key,
+            )
+        except Exception as exc:
+            logger.error(
+                "diagnosis.publish_failed",
+                incident_id=message.incident_id,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            return False
+        logger.info(
+            "diagnosis.published",
+            incident_id=message.incident_id,
+            category=message.root_cause_category.value,
+            confidence=message.confidence,
+        )
+        return True
