@@ -249,6 +249,14 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     api_key: OptionalSecret = Field(default=None, validation_alias="API_KEY")
 
+    #: The analytics database the broken pipelines read and write, inspected through a
+    #: SELECT-only role. Separate from the agent's own database so the agent cannot
+    #: inspect its own state and mistake it for evidence about a pipeline.
+    warehouse_dsn: str = Field(
+        default="postgresql+psycopg://dagdoctor_ro:dagdoctor_ro@localhost:5432/warehouse",
+        validation_alias="WAREHOUSE_DSN",
+    )
+
     llm: LLMSettings = Field(default_factory=LLMSettings)
     budgets: BudgetSettings = Field(default_factory=BudgetSettings)
     db: DatabaseSettings = Field(default_factory=DatabaseSettings)

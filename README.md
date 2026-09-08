@@ -62,7 +62,10 @@ Six more scenarios land with the evaluation harness.
   groups. The substitution is deliberate, not an oversight.
 - **Ollama is the default provider.** The quickstart costs nothing and needs no signup.
   Anthropic and OpenAI are supported through the same factory.
-- **Read-only by design.** The agent proposes fixes; it never applies them.
+- **Read-only by design.** The agent proposes fixes; it never applies them. Tools take a
+  connection *name*, never a DSN, table and column names are validated rather than
+  interpolated, and every query runs in a read-only transaction with a statement timeout.
+  The agent writes only to its own database, which is its memory.
 
 ## Licence
 

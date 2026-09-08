@@ -283,3 +283,24 @@ class SchemaSnapshot(Base):
     captured_at: Mapped[datetime] = mapped_column(
         TimestampColumn, default=_utc_now, server_default=func.now()
     )
+
+
+class TableProfile(Base):
+    """A table's shape as it was, so a data quality regression can be measured.
+
+    Written by the profiling tool itself. The agent is strictly read-only against Airflow
+    and the warehouse; its own memory is the one thing it writes, and this is what lets it
+    say "this column was 2% null last week and is 90% null now" rather than only "this
+    column is 90% null", which on its own is not a finding.
+    """
+
+    __tablename__ = "table_profiles"
+    __table_args__ = (Index("ix_profiles_lookup", "connection", "table_name", "captured_at"),)
+
+    id: Mapped[UUID] = mapped_column(UUIDColumn, primary_key=True, default=uuid4)
+    connection: Mapped[str] = mapped_column(String(80))
+    table_name: Mapped[str] = mapped_column(String(250))
+    row_count: Mapped[int] = mapped_column(Integer, default=0)
+    sampled_rows: Mapped[int] = mapped_column(Integer, default=0)
+    columns: Mapped[list[object]] = mapped_column(JSONColumn, default=list)
+    captured_at: Mapped[datetime] = mapped_column(TimestampColumn, default=_utc_now)

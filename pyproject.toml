@@ -107,6 +107,9 @@ convention = "google"
 "alembic/**" = ["D", "N999"]
 # Airflow DAG files are declarative and follow Airflow's own module conventions.
 "airflow/dags/**" = ["D100", "D103", "ARG001"]
+# Carries a verbatim Airflow task log as a fixture. Rewrapping it to fit the line length
+# would stop it being a sample of the thing the parser has to handle.
+"tests/unit/tools/test_airflow_logs.py" = ["E501"]
 
 [tool.ruff.format]
 docstring-code-format = true
