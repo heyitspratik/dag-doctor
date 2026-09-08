@@ -21,6 +21,7 @@ EXPECTED_SERVICES = {
     "ollama",
     "migrate",
     "agent-worker",
+    "agent-api",
     "airflow-init",
     "airflow-scheduler",
     "airflow-webserver",
@@ -91,3 +92,23 @@ def test_every_named_volume_is_declared():
     }
 
     assert mounted | airflow_mounts <= set(STACK["volumes"])
+
+
+def test_the_api_and_the_worker_run_the_same_image():
+    # Two entrypoints from one build, which is what lets them be scaled separately
+    # without maintaining two images.
+    assert SERVICES["agent-api"]["image"] == SERVICES["agent-worker"]["image"]
+    assert SERVICES["agent-api"]["command"] == ["dag-doctor-api"]
+
+
+def test_the_worker_exposes_its_own_metrics_port():
+    # Separate processes have separate registries, so one scrape endpoint cannot serve
+    # both.
+    assert SERVICES["agent-worker"]["environment"]["METRICS_PORT"] == 9100
+
+
+def test_both_agent_services_read_the_warehouse_through_the_read_only_role():
+    for name in ("agent-api", "agent-worker"):
+        assert SERVICES[name]["environment"]["WAREHOUSE_DSN"].startswith(
+            "postgresql+psycopg://dagdoctor_ro:"
+        )

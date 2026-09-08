@@ -129,6 +129,30 @@ class LLMSettings(BaseSettings):
         """
         return self.node_models.get(node) or self.default_model
 
+    def with_model(self, model: str) -> LLMSettings:
+        """Return these settings with every node pinned to one model.
+
+        Used by replay, whose whole purpose is running the same failure against a
+        different model. Per-node overrides are cleared, because an override left in place
+        would silently defeat the comparison the replay was asked for.
+
+        Args:
+            model: The model name to use everywhere.
+
+        Returns:
+            A copy of these settings.
+        """
+        return self.model_copy(
+            update={
+                # Only the active provider's field is read, so setting all three keeps
+                # this correct without branching on the provider.
+                "ollama_model": model,
+                "anthropic_model": model,
+                "openai_model": model,
+                "node_models": NodeModelOverrides(),
+            }
+        )
+
     @model_validator(mode="after")
     def _require_provider_credentials(self) -> Self:
         """Fail at load time, with the offending variable named, rather than mid-diagnosis."""
@@ -256,6 +280,10 @@ class Settings(BaseSettings):
         default="postgresql+psycopg://dagdoctor_ro:dagdoctor_ro@localhost:5432/warehouse",
         validation_alias="WAREHOUSE_DSN",
     )
+
+    #: Where the worker serves its own Prometheus endpoint. The API serves its own on
+    #: the port it already listens on.
+    metrics_port: int = Field(default=9100, ge=1, le=65535, validation_alias="METRICS_PORT")
 
     llm: LLMSettings = Field(default_factory=LLMSettings)
     budgets: BudgetSettings = Field(default_factory=BudgetSettings)

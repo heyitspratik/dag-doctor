@@ -27,9 +27,9 @@ loops until a hypothesis survives its test or a budget is exhausted.
 
 ## Quickstart
 
-The worker now investigates: a failure becomes an incident, the graph runs, and the
-diagnosis and its full step trace are persisted. There is no HTTP API yet, so reading a
-diagnosis means querying Postgres or watching the logs.
+The stack runs end to end: a failure becomes an incident, the graph investigates it, and
+the diagnosis and its full trace are readable over HTTP. Six of the eight seeded scenarios
+and the evaluation harness are still to come.
 
 ```bash
 make dev                              # sync dependencies, install the pre-commit hooks
@@ -38,7 +38,17 @@ make up                               # postgres, redpanda, ollama, airflow, the
 make seed-failures                    # trigger every seeded DAG
 make topic-tail                       # see the failure events on airflow.task.failed
 make logs                             # watch the worker diagnose them
+curl localhost:8000/api/v1/incidents  # the incidents, newest first
 ```
+
+Then follow one incident to the endpoint worth looking at:
+
+```bash
+curl "localhost:8000/api/v1/incidents/<id>/investigation"
+```
+
+It returns everything the agent did: what it looked at, what it believed, what it tried to
+disprove, and what it concluded. OpenAPI docs are at http://localhost:8000/docs.
 
 Airflow is at http://localhost:8080 (`airflow` / `airflow`). `schema_drift_orders` fails
 by design and `healthy_baseline` succeeds; only the first should put a message on the

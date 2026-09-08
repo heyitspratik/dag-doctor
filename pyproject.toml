@@ -45,6 +45,7 @@ dependencies = [
 # Two entrypoints from one image, which is why the worker and the API can be scaled
 # independently without maintaining two builds.
 dag-doctor-worker = "dag_doctor.worker.main:main"
+dag-doctor-api = "dag_doctor.api.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/pratikahir/dag-doctor"

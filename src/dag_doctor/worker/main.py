@@ -13,9 +13,11 @@ import asyncio
 import signal
 from collections.abc import Awaitable, Callable
 
+from prometheus_client import start_http_server
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dag_doctor.core.logging import configure_logging, get_logger, incident_context
+from dag_doctor.core.metrics import WORKER_UP
 from dag_doctor.core.models import FailureEvent
 from dag_doctor.core.settings import Settings, get_settings
 from dag_doctor.db.repositories import IncidentRepository
@@ -84,6 +86,11 @@ async def run_worker(settings: Settings | None = None) -> None:
     settings = settings or get_settings()
     configure_logging(settings.app_env, settings.log_level)
 
+    # The worker and the API are separate processes with separate registries, so the
+    # worker serves its own scrape endpoint rather than trying to share one.
+    start_http_server(settings.metrics_port)
+    WORKER_UP.set(1)
+
     engine = build_engine(settings.db)
     session_factory = build_session_factory(engine)
     connections = ConnectionRegistry.from_settings(settings)
@@ -103,6 +110,7 @@ async def run_worker(settings: Settings | None = None) -> None:
             async with investigator, consumer:
                 await consumer.run()
         finally:
+            WORKER_UP.set(0)
             await connections.dispose()
             await engine.dispose()
 

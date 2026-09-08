@@ -15,6 +15,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dag_doctor.core.exceptions import DagDoctorError, ResourceNotFoundError
 from dag_doctor.core.logging import get_logger, incident_context
+from dag_doctor.core.metrics import (
+    CONFIDENCE,
+    DIAGNOSIS_LATENCY,
+    INCIDENTS_RECEIVED,
+    INVESTIGATIONS_COMPLETED,
+    TOKENS_SPENT,
+    TOOL_CALLS,
+    TOOL_DURATION,
+)
 from dag_doctor.core.models import (
     Diagnosis,
     FailureEvent,
@@ -87,6 +96,7 @@ class Investigator:
         Returns:
             The diagnosis, or ``None`` if the incident was already diagnosed.
         """
+        INCIDENTS_RECEIVED.labels(dag_id=event.dag_id).inc()
         async with session_scope(self._session_factory) as session:
             incident, created = await IncidentRepository(session).get_or_create(event)
             incident_id = incident.id
@@ -124,7 +134,8 @@ class Investigator:
                 attempt = await InvestigationRepository(session).next_attempt(incident_id)
 
             logger.info("investigation.started", attempt=attempt)
-            state = await self._run_graph(incident_id, event)
+            with DIAGNOSIS_LATENCY.time():
+                state = await self._run_graph(incident_id, event)
 
             async with session_scope(self._session_factory) as session:
                 await InvestigationRepository(session).save(state, attempt)
@@ -133,6 +144,7 @@ class Investigator:
                     incident.status = _status_for(state)
 
             await self._announce(state, event, attempt)
+            _record_metrics(state)
             _log_outcome(state)
             return state.diagnosis
 
@@ -204,6 +216,26 @@ def _halted(state: InvestigationState, error: str) -> InvestigationState:
             ),
         }
     )
+
+
+def _record_metrics(state: InvestigationState) -> None:
+    """Publish what this investigation cost and concluded."""
+    for item in state.evidence:
+        TOOL_CALLS.labels(tool=item.tool_name, status="ok" if item.succeeded else "failed").inc()
+        TOOL_DURATION.labels(tool=item.tool_name).observe(item.duration_ms / 1000)
+    for step in state.steps:
+        TOKENS_SPENT.labels(node=step.node, direction="prompt").inc(step.prompt_tokens)
+        TOKENS_SPENT.labels(node=step.node, direction="completion").inc(step.completion_tokens)
+
+    diagnosis = state.diagnosis
+    if diagnosis is None:
+        return
+    CONFIDENCE.observe(diagnosis.confidence)
+    INVESTIGATIONS_COMPLETED.labels(
+        root_cause_category=diagnosis.root_cause_category.value,
+        conclusive=str(diagnosis.is_conclusive).lower(),
+        halt_reason=diagnosis.halt_reason.value,
+    ).inc()
 
 
 def _log_outcome(state: InvestigationState) -> None:

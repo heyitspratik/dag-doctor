@@ -40,7 +40,14 @@ COPY --chown=appuser:appuser alembic.ini ./
 COPY --chown=appuser:appuser alembic ./alembic
 
 USER appuser
+EXPOSE 8000 9100
 
-# The worker is the default. The API entrypoint is added with the API itself, and the
-# healthcheck arrives with the /health routes it would probe.
+# Uses the interpreter that is already present rather than adding curl for one probe.
+# Overridden for the worker in compose, which has no HTTP surface of its own beyond
+# metrics.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
+    CMD ["python", "-c", "import urllib.request as r,sys; sys.exit(0 if r.urlopen('http://127.0.0.1:8000/health/live', timeout=4).status==200 else 1)"]
+
+# Two entrypoints from one image. The worker is the default; compose and the Helm chart
+# override the command for the API.
 CMD ["dag-doctor-worker"]

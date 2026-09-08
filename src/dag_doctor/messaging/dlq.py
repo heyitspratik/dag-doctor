@@ -7,6 +7,7 @@ later incident on that partition being starved behind it.
 
 from dag_doctor.core.exceptions import MessagingError
 from dag_doctor.core.logging import get_logger
+from dag_doctor.core.metrics import MESSAGES_DEAD_LETTERED
 from dag_doctor.core.settings import KafkaSettings
 from dag_doctor.messaging.producer import AsyncProducer, _build_aiokafka_producer
 from dag_doctor.messaging.schemas import DeadLetterMessage
@@ -94,6 +95,7 @@ class DeadLetterPublisher:
                 details={"topic": self._settings.topic_dlq, "reason": reason},
             ) from exc
 
+        MESSAGES_DEAD_LETTERED.labels(reason=reason).inc()
         logger.warning(
             "message.dead_lettered",
             reason=reason,
