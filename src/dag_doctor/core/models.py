@@ -150,6 +150,10 @@ class Hypothesis(BaseModel):
     statement: str
     root_cause_category: RootCauseCategory
     proposed_test: str
+    #: The tool call that would refute this hypothesis. Structured rather than prose so
+    #: the test node can actually execute it: a test nobody can run is not a test.
+    test_tool: str | None = None
+    test_arguments: dict[str, JsonValue] = Field(default_factory=dict)
     rank: int = 0
     outcome: HypothesisOutcome = HypothesisOutcome.UNTESTED
     test_notes: str | None = None

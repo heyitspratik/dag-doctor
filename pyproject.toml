@@ -146,6 +146,9 @@ asyncio_mode = "auto"
 markers = [
     "integration: needs real Postgres/Redpanda containers; excluded from the default run",
 ]
+# This suite has no test classes, and leaving collection on means pytest tries to collect
+# production classes whose names happen to start with Test, such as TestHypothesisNode.
+python_classes = []
 filterwarnings = ["error"]
 
 [tool.coverage.run]

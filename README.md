@@ -27,8 +27,8 @@ loops until a hypothesis survives its test or a budget is exhausted.
 
 ## Quickstart
 
-The investigation graph is not built yet, so the stack currently ends at "a failure
-becomes an incident row".
+The graph is built and tested, but the worker does not run it yet, so the stack
+currently ends at "a failure becomes an incident row".
 
 ```bash
 make dev                              # sync dependencies, install the pre-commit hooks
@@ -62,6 +62,10 @@ Six more scenarios land with the evaluation harness.
   groups. The substitution is deliberate, not an oversight.
 - **Ollama is the default provider.** The quickstart costs nothing and needs no signup.
   Anthropic and OpenAI are supported through the same factory.
+- **Confidence is computed, not claimed.** It comes from the shape of the investigation:
+  whether a known signature matched, whether a hypothesis survived a real test, how many
+  independent tools support it, and how many hypotheses were discarded first. See
+  [docs/confidence.md](docs/confidence.md).
 - **Read-only by design.** The agent proposes fixes; it never applies them. Tools take a
   connection *name*, never a DSN, table and column names are validated rather than
   interpolated, and every query runs in a read-only transaction with a statement timeout.

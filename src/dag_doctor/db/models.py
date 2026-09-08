@@ -207,6 +207,9 @@ class HypothesisRecord(Base):
         )
     )
     proposed_test: Mapped[str] = mapped_column(Text)
+    #: The tool call that would refute this hypothesis, stored so a replay can see not
+    #: just what was claimed but what was actually run to challenge it.
+    test_call: Mapped[dict[str, object]] = mapped_column(JSONColumn, default=dict)
     outcome: Mapped[HypothesisOutcome] = mapped_column(
         Enum(
             HypothesisOutcome,
