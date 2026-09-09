@@ -22,19 +22,34 @@ repos:
       - id: mixed-line-ending
         args: [--fix=lf]
 
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.6
+  # ruff and mypy both run from the project's own environment rather than from a pinned
+  # mirror. A mirror pins a version independently of uv.lock, and two ruff versions format
+  # differently, so `make check` would pass and then the commit hook would rewrite the same
+  # file. One ruff, one answer, and `uv lock --upgrade` moves both at once.
+  - repo: local
     hooks:
       - id: ruff-format
-      - id: ruff
-        args: [--fix]
+        name: ruff-format
+        # --force-exclude because pre-commit passes filenames explicitly, and ruff ignores
+        # its own exclude list for files named on the command line. Without it the hook
+        # reformats alembic/versions, which pyproject deliberately leaves alone.
+        entry: uv run ruff format --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.14.1
-    hooks:
+      - id: ruff
+        name: ruff
+        entry: uv run ruff check --fix --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
       - id: mypy
-        # mypy needs the project's own dependencies to resolve third-party types,
-        # so run it against the synced venv rather than pre-commit's isolated one.
-        pass_filenames: false
+        name: mypy
+        # mypy needs the project's own dependencies to resolve third-party types, and
+        # checks the whole tree rather than the changed files, so it takes no filenames.
         entry: uv run mypy
         language: system
+        types: [python]
+        pass_filenames: false

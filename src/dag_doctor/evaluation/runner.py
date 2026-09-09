@@ -22,6 +22,7 @@ from dag_doctor.core.exceptions import DagDoctorError
 from dag_doctor.core.logging import configure_logging, get_logger
 from dag_doctor.core.models import RootCauseCategory
 from dag_doctor.core.settings import Settings, get_settings
+from dag_doctor.evaluation.report import fetch_latest, render
 from dag_doctor.evaluation.scenarios import SCENARIOS, Scenario
 from dag_doctor.evaluation.scorer import Observed, ScenarioResult, Scorecard
 
@@ -256,6 +257,14 @@ async def _run(arguments: argparse.Namespace) -> int:
         if arguments.command == "seed":
             await seed(clients)
             return 0
+        if arguments.command == "trace":
+            incident, investigation = await fetch_latest(clients.agent, arguments.dag_id)
+            example = render(incident, investigation)
+            print(example)
+            if arguments.output:
+                arguments.output.parent.mkdir(parents=True, exist_ok=True)
+                arguments.output.write_text(example, encoding="utf-8")
+            return 0
         scorecard = await evaluate(
             clients,
             timeout_s=arguments.timeout,
@@ -268,6 +277,7 @@ async def _run(arguments: argparse.Namespace) -> int:
     table = scorecard.to_markdown()
     print(table)
     if arguments.output:
+        arguments.output.parent.mkdir(parents=True, exist_ok=True)
         arguments.output.write_text(table, encoding="utf-8")
     # A non-zero exit when accuracy falls below the floor, so this can gate a pipeline
     # rather than only inform one.
@@ -275,9 +285,14 @@ async def _run(arguments: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    """Entry point for ``make seed-failures`` and ``make evaluate``."""
+    """Entry point for ``make seed-failures``, ``make evaluate`` and ``make example``."""
     parser = argparse.ArgumentParser(description="Run the seeded failure scenarios.")
-    parser.add_argument("command", choices=["seed", "evaluate"])
+    parser.add_argument("command", choices=["seed", "evaluate", "trace"])
+    parser.add_argument(
+        "--dag-id",
+        default="schema_drift_orders",
+        help="Which DAG to write up, for the trace command",
+    )
     parser.add_argument("--agent-url", default="http://localhost:8000")
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_S)
     parser.add_argument("--control-timeout", type=float, default=CONTROL_WAIT_S)

@@ -8,10 +8,12 @@ AIRFLOW_URL  ?= http://localhost:8080
 AIRFLOW_AUTH ?= airflow:airflow
 AGENT_URL    ?= http://localhost:8000
 EVAL_OUTPUT  ?= results/accuracy.md
+EXAMPLE_DAG  ?= schema_drift_orders
+EXAMPLE_OUTPUT ?= results/worked-example.md
 
 .DEFAULT_GOAL := help
 .PHONY: help install dev up down logs migrate pull-models trigger seed-failures \
-        topic-tail evaluate test test-integration lint format typecheck check \
+        topic-tail example evaluate test test-integration lint format typecheck check \
         helm-lint kind-deploy kind-destroy clean
 
 help:  ## Show this help
@@ -54,6 +56,10 @@ seed-failures:  ## Trigger every seeded DAG so the agent has incidents to diagno
 topic-tail:  ## Print what is currently on the failure topic
 	$(COMPOSE) exec redpanda rpk topic consume airflow.task.failed \
 		--brokers localhost:9092 --num 10 --offset start
+
+example:  ## Render the latest investigation of $(EXAMPLE_DAG) as markdown
+	$(UV) run python -m dag_doctor.evaluation.runner trace \
+		--agent-url $(AGENT_URL) --dag-id $(EXAMPLE_DAG) --output $(EXAMPLE_OUTPUT)
 
 evaluate:  ## Trigger the scenarios, wait for diagnoses, print the accuracy table
 	$(UV) run python -m dag_doctor.evaluation.runner evaluate \
