@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dag-doctor.fullname" . }}-worker
+  labels:
+    {{- include "dag-doctor.componentLabels" (dict "root" . "component" "worker") | nindent 4 }}
+spec:
+  {{- if not .Values.worker.autoscaling.enabled }}
+  replicas: {{ .Values.worker.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "dag-doctor.componentSelectorLabels" (dict "root" . "component" "worker") | nindent 6 }}
+  strategy:
+    # Recreate would idle the consumer group for the whole rollout. Rolling keeps the
+    # other members consuming through the rebalance.
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "dag-doctor.componentLabels" (dict "root" . "component" "worker") | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "dag-doctor.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # This is what lets the worker finish the incident it is holding. On SIGTERM it
+      # stops taking new records and drains the one in flight, so the grace period has to
+      # exceed a whole investigation. There is deliberately no preStop hook here: a
+      # preStop runs before SIGTERM and eats into this same window, so it would delay the
+      # drain rather than enable it. See deploy/helm/dag-doctor/README.md.
+      terminationGracePeriodSeconds: {{ .Values.worker.terminationGracePeriodSeconds }}
+      containers:
+        - name: worker
+          image: {{ include "dag-doctor.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["dag-doctor-worker"]
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.config.metricsPort }}
+              protocol: TCP
+          {{- include "dag-doctor.env" . | nindent 10 }}
+          # The worker has no HTTP surface beyond metrics, so its own exporter answering
+          # is the available evidence that the process is alive. There is no readiness
+          # probe: nothing routes traffic to a consumer, and a consumer that is behind is
+          # still working rather than unready.
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          volumeMounts:
+            {{- include "dag-doctor.writableVolumeMounts" . | nindent 12 }}
+      volumes:
+        {{- include "dag-doctor.writableVolumes" . | nindent 8 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

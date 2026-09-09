@@ -1,0 +1,62 @@
+# kind or minikube. Everything shrunk to what a laptop can spare, and pointed at the
+# services the compose stack already runs.
+#
+#   helm upgrade --install dag-doctor deploy/helm/dag-doctor -f values-local.yaml
+
+image:
+  # Loaded into the kind node with `kind load docker-image`, so there is nothing to pull.
+  repository: dag-doctor
+  tag: local
+  pullPolicy: Never
+
+config:
+  appEnv: dev
+  logLevel: DEBUG
+
+  # In-cluster names from deploy/kind/dependencies.yaml.
+  ollamaBaseUrl: http://ollama:11434
+  # Small enough that `make kind-deploy` can pull it in a smoke test. It diagnoses
+  # noticeably worse than llama3.2:3b, which is the point of the accuracy table.
+  ollamaModel: qwen2.5:0.5b
+  kafkaBootstrapServers: redpanda:9092
+  airflowBaseUrl: http://airflow-webserver:8080
+  # Budgets kept small: a local model is slow, and waiting five iterations to watch the
+  # graph work is a poor way to spend a demonstration.
+  maxIterations: 3
+  maxToolCalls: 10
+
+api:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+  podDisruptionBudget:
+    # One replica plus a disruption budget blocks node drains, which on a single-node
+    # kind cluster means nothing can ever be evicted.
+    enabled: false
+
+worker:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 768Mi
+  # Shorter than production, because the small budgets above mean an investigation here
+  # finishes in a couple of minutes rather than fifteen.
+  terminationGracePeriodSeconds: 180
+  podDisruptionBudget:
+    enabled: false
+
+secrets:
+  create: true
+  postgresDsn: postgresql+psycopg://dagdoctor:dagdoctor@postgres:5432/dag_doctor
+  airflowDsn: postgresql+psycopg://dagdoctor:dagdoctor@postgres:5432/dag_doctor
+  warehouseDsn: postgresql+psycopg://dagdoctor:dagdoctor@postgres:5432/dag_doctor
+
+migration:
+  enabled: true

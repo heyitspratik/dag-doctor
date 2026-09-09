@@ -1,0 +1,189 @@
+# Defaults suit a real cluster. deploy/helm/dag-doctor/values-local.yaml shrinks
+# everything for kind, and values-prod.yaml shows what a production install changes.
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: ghcr.io/pratikahir/dag-doctor
+  # Empty means the chart's appVersion, so the chart and the image cannot drift apart
+  # by accident.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+# Applies to every pod. The image already runs as a non-root user; this states the same
+# thing to the cluster, so a policy engine can enforce what the image merely intends.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  runAsGroup: 1001
+  fsGroup: 1001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Non-secret configuration. Rendered into a ConfigMap and mounted as environment.
+config:
+  appEnv: prod
+  logLevel: INFO
+
+  llmProvider: ollama
+  ollamaBaseUrl: http://ollama:11434
+  ollamaModel: llama3.2:3b
+  anthropicModel: claude-sonnet-5
+  openaiModel: gpt-4o-mini
+  temperature: "0.0"
+  maxOutputTokens: 2048
+
+  # Per-node model overrides. Triage is a cheap classification a small model handles;
+  # forming a hypothesis from a dozen pieces of evidence is where a stronger one earns
+  # its cost. Leave empty to use the provider default everywhere.
+  nodeModels: {}
+  #   triage: qwen2.5:0.5b
+  #   formHypothesis: llama3.1:8b
+
+  # Hard limits on one investigation. Hitting either is a normal terminal state that
+  # produces an inconclusive diagnosis, not a crash.
+  maxIterations: 5
+  maxToolCalls: 20
+  toolTimeoutSeconds: 30
+
+  airflowBaseUrl: http://airflow-webserver:8080
+  airflowUsername: airflow
+
+  kafkaBootstrapServers: redpanda:9092
+  kafkaConsumerGroup: dag-doctor-worker
+  kafkaTopicFailures: airflow.task.failed
+  kafkaTopicDiagnoses: agent.diagnosis.completed
+  kafkaTopicDlq: airflow.task.failed.dlq
+
+  metricsPort: 9100
+
+# Connection strings and keys.
+#
+# The committed defaults exist so `helm install` works against the compose stack without
+# ceremony. They are not a production pattern. In production set `create: false` and
+# `existingSecret` to something managed by External Secrets, SOPS, or your cloud's secret
+# manager, so credentials never sit in a values file or in git history.
+secrets:
+  create: true
+  existingSecret: ""
+  postgresDsn: postgresql+psycopg://dagdoctor:dagdoctor@postgres:5432/dag_doctor
+  airflowDsn: postgresql+psycopg://dagdoctor_ro:dagdoctor_ro@postgres:5432/airflow
+  warehouseDsn: postgresql+psycopg://dagdoctor_ro:dagdoctor_ro@postgres:5432/warehouse
+  airflowPassword: airflow
+  # Blank leaves the HTTP API open, which is what the local values want and what a
+  # production install must not do.
+  apiKey: ""
+  anthropicApiKey: ""
+  openaiApiKey: ""
+
+# Runs `alembic upgrade head` before the application starts, as a Helm hook, so a rollout
+# never begins against a schema that has not caught up.
+migration:
+  enabled: true
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+
+api:
+  replicaCount: 2
+  service:
+    type: ClusterIP
+    port: 8000
+    annotations: {}
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      # No CPU limit on purpose: throttling an API to a share it rarely needs adds tail
+      # latency for no benefit, while the memory limit is what actually protects the node.
+      memory: 512Mi
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  # Long enough to finish in-flight requests after the endpoint is withdrawn.
+  terminationGracePeriodSeconds: 45
+  # Lets the endpoints controller remove this pod before it stops accepting work, so a
+  # rollout does not drop requests that were already routed here.
+  preStopSleepSeconds: 5
+  livenessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 15
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readinessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+worker:
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+  # The worker finishes the incident it is holding when it receives SIGTERM, so this has
+  # to exceed one investigation. A local model running five iterations takes minutes, and
+  # a grace period shorter than that would kill investigations mid-flight on every deploy.
+  terminationGracePeriodSeconds: 900
+  podDisruptionBudget:
+    enabled: true
+    maxUnavailable: 1
+  autoscaling:
+    # Off by default because the lag metric below needs something publishing it. An HPA
+    # referencing a metric nobody provides does not fail loudly, it simply never scales,
+    # which is worse than not having one.
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 10
+    consumerLag:
+      enabled: true
+      # Requires Prometheus Adapter exposing kafka_consumergroup_lag as an external
+      # metric, or KEDA. Partition count caps useful replicas: a consumer group cannot
+      # use more members than the topic has partitions.
+      metricName: kafka_consumergroup_lag
+      targetLagPerPod: "20"
+    targetCPUUtilizationPercentage: 0
+
+# For a cluster running the Prometheus Operator. Both processes expose their own metrics,
+# because they are separate processes with separate registries.
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}

@@ -10,6 +10,11 @@ repos:
       - id: check-added-large-files
         args: [--maxkb=512]
       - id: check-yaml
+        # Kubernetes manifests are conventionally multi-document, and Helm templates are
+        # Go templates rather than YAML: they only become YAML once rendered. CI checks
+        # those properly, with helm lint and kubeconform against the rendered output.
+        args: [--allow-multiple-documents]
+        exclude: ^deploy/helm/[^/]+/templates/
       - id: check-toml
       - id: check-json
       - id: check-merge-conflict

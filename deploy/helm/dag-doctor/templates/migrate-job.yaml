@@ -1,0 +1,49 @@
+{{- if .Values.migration.enabled }}
+{{- /*
+A Helm hook rather than an init container. An init container would run the migration once
+per replica, racing itself; a hook runs once per release and blocks the rollout until the
+schema has caught up.
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "dag-doctor.fullname" . }}-migrate
+  labels:
+    {{- include "dag-doctor.componentLabels" (dict "root" . "component" "migrate") | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    # Kept on failure so the logs survive long enough to read. A migration that failed
+    # and then deleted its own evidence is the worst possible time to be tidy.
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migration.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migration.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "dag-doctor.componentLabels" (dict "root" . "component" "migrate") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "dag-doctor.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "dag-doctor.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["alembic", "upgrade", "head"]
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          {{- include "dag-doctor.env" . | nindent 10 }}
+          resources:
+            {{- toYaml .Values.migration.resources | nindent 12 }}
+          volumeMounts:
+            {{- include "dag-doctor.writableVolumeMounts" . | nindent 12 }}
+      volumes:
+        {{- include "dag-doctor.writableVolumes" . | nindent 8 }}
+{{- end }}

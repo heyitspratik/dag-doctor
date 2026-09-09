@@ -108,6 +108,43 @@ jobs:
           print("Parsed:", ", ".join(sorted(bag.dag_ids)))
           PY
 
+  helm:
+    name: Lint and render the chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - name: helm lint, against every values file
+        run: |
+          helm lint deploy/helm/dag-doctor
+          helm lint deploy/helm/dag-doctor -f deploy/helm/dag-doctor/values-local.yaml
+          helm lint deploy/helm/dag-doctor -f deploy/helm/dag-doctor/values-prod.yaml
+
+      - name: Install kubeconform
+        run: |
+          curl -fsSL \
+            https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | tar xz -C /usr/local/bin kubeconform
+
+      # helm lint only checks that the YAML parses and the chart follows conventions. This
+      # checks the rendered manifests against the real Kubernetes API schemas, which is
+      # what catches a misspelled field that would be silently ignored by the cluster.
+      - name: Validate the rendered manifests
+        run: |
+          for values in "" \
+            "-f deploy/helm/dag-doctor/values-local.yaml" \
+            "-f deploy/helm/dag-doctor/values-prod.yaml"; do
+            helm template dag-doctor deploy/helm/dag-doctor $values \
+              | kubeconform -strict -summary -kubernetes-version 1.29.0 \
+                  -schema-location default \
+                  -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+          done
+          kubeconform -strict -summary -kubernetes-version 1.29.0 deploy/kind/dependencies.yaml
+
   commit-lint:
     name: Conventional commit PR title
     if: github.event_name == 'pull_request'

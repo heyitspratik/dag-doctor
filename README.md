@@ -28,9 +28,10 @@ loops until a hypothesis survives its test or a budget is exhausted.
 ## Quickstart
 
 The stack runs end to end: a failure becomes an incident, the graph investigates it, and
-the diagnosis and its full trace are readable over HTTP. All eight scenarios are seeded
-and `make evaluate` scores them. No accuracy table is published yet, because no run has
-been performed; the Helm chart and the measured results are the remaining work.
+the diagnosis and its full trace are readable over HTTP. All eight scenarios are seeded,
+`make evaluate` scores them, and a Helm chart deploys the API and worker separately. No
+accuracy table is published yet, because no run has been performed. That is the remaining
+work.
 
 ```bash
 make dev                              # sync dependencies, install the pre-commit hooks
@@ -101,6 +102,20 @@ is wrong cannot hide behind a good average.
   connection *name*, never a DSN, table and column names are validated rather than
   interpolated, and every query runs in a read-only transaction with a statement timeout.
   The agent writes only to its own database, which is its memory.
+
+## Kubernetes
+
+```bash
+make kind-deploy    # kind cluster, dependencies, image, chart
+make helm-lint      # lint and render against all three values files
+```
+
+The chart is at [`deploy/helm/dag-doctor/`](deploy/helm/dag-doctor/), with separate
+Deployments for the API and the worker so they scale on the things that actually load
+them: requests for one, consumer lag for the other. Its
+[README](deploy/helm/dag-doctor/README.md) covers the three decisions worth knowing about,
+including why the worker deliberately has no `preStop` hook and what the lag-based
+autoscaler needs before it will do anything.
 
 ## Licence
 

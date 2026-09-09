@@ -1,0 +1,35 @@
+{{ include "dag-doctor.fullname" . }} is installed.
+
+  API:     {{ .Values.api.replicaCount }} replica(s), image {{ include "dag-doctor.image" . }}
+  Worker:  {{ .Values.worker.replicaCount }} replica(s), consumer group {{ .Values.config.kafkaConsumerGroup }}
+  Provider: {{ .Values.config.llmProvider }}
+
+Reach the API:
+
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "dag-doctor.fullname" . }}-api {{ .Values.api.service.port }}:{{ .Values.api.service.port }}
+  curl localhost:{{ .Values.api.service.port }}/api/v1/incidents
+
+The endpoint worth looking at is the trace, which shows what the agent looked at, what it
+believed, what it tried to disprove, and what it concluded:
+
+  curl localhost:{{ .Values.api.service.port }}/api/v1/incidents/<id>/investigation
+
+{{- if and .Values.secrets.create (not .Values.secrets.apiKey) }}
+
+WARNING: no API key is set, so the HTTP API is open to anything that can reach it. Set
+secrets.apiKey, or better, secrets.create=false with secrets.existingSecret pointing at a
+managed secret.
+{{- end }}
+{{- if and .Values.secrets.create (eq .Values.config.appEnv "prod") }}
+
+WARNING: credentials are coming from values rather than from a managed secret. For a
+production install set secrets.create=false and secrets.existingSecret.
+{{- end }}
+{{- if and .Values.worker.autoscaling.enabled .Values.worker.autoscaling.consumerLag.enabled }}
+
+The worker HPA scales on {{ .Values.worker.autoscaling.consumerLag.metricName }}, which
+needs Prometheus Adapter or KEDA publishing it as an external metric. Without one the HPA
+will report the target as unknown and never scale. Check it with:
+
+  kubectl --namespace {{ .Release.Namespace }} get hpa {{ include "dag-doctor.fullname" . }}-worker
+{{- end }}

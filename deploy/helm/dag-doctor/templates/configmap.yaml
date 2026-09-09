@@ -1,0 +1,50 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "dag-doctor.fullname" . }}-config
+  labels:
+    {{- include "dag-doctor.labels" . | nindent 4 }}
+data:
+  APP_ENV: {{ .Values.config.appEnv | quote }}
+  LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+
+  LLM_PROVIDER: {{ .Values.config.llmProvider | quote }}
+  OLLAMA_BASE_URL: {{ .Values.config.ollamaBaseUrl | quote }}
+  OLLAMA_MODEL: {{ .Values.config.ollamaModel | quote }}
+  ANTHROPIC_MODEL: {{ .Values.config.anthropicModel | quote }}
+  OPENAI_MODEL: {{ .Values.config.openaiModel | quote }}
+  LLM_TEMPERATURE: {{ .Values.config.temperature | quote }}
+  LLM_MAX_OUTPUT_TOKENS: {{ .Values.config.maxOutputTokens | quote }}
+
+  {{- with .Values.config.nodeModels }}
+  {{- with .triage }}
+  LLM_MODEL_TRIAGE: {{ . | quote }}
+  {{- end }}
+  {{- with .gatherEvidence }}
+  LLM_MODEL_GATHER_EVIDENCE: {{ . | quote }}
+  {{- end }}
+  {{- with .formHypothesis }}
+  LLM_MODEL_FORM_HYPOTHESIS: {{ . | quote }}
+  {{- end }}
+  {{- with .testHypothesis }}
+  LLM_MODEL_TEST_HYPOTHESIS: {{ . | quote }}
+  {{- end }}
+  {{- with .conclude }}
+  LLM_MODEL_CONCLUDE: {{ . | quote }}
+  {{- end }}
+  {{- end }}
+
+  MAX_ITERATIONS: {{ .Values.config.maxIterations | quote }}
+  MAX_TOOL_CALLS: {{ .Values.config.maxToolCalls | quote }}
+  TOOL_TIMEOUT_SECONDS: {{ .Values.config.toolTimeoutSeconds | quote }}
+
+  AIRFLOW_BASE_URL: {{ .Values.config.airflowBaseUrl | quote }}
+  AIRFLOW_USERNAME: {{ .Values.config.airflowUsername | quote }}
+
+  KAFKA_BOOTSTRAP_SERVERS: {{ .Values.config.kafkaBootstrapServers | quote }}
+  KAFKA_CONSUMER_GROUP: {{ .Values.config.kafkaConsumerGroup | quote }}
+  KAFKA_TOPIC_FAILURES: {{ .Values.config.kafkaTopicFailures | quote }}
+  KAFKA_TOPIC_DIAGNOSES: {{ .Values.config.kafkaTopicDiagnoses | quote }}
+  KAFKA_TOPIC_DLQ: {{ .Values.config.kafkaTopicDlq | quote }}
+
+  METRICS_PORT: {{ .Values.config.metricsPort | quote }}

@@ -2,6 +2,8 @@ UV      ?= uv
 COMPOSE ?= docker compose -f docker/docker-compose.yml
 CHART   ?= deploy/helm/dag-doctor
 KIND_CLUSTER ?= dag-doctor
+NAMESPACE    ?= dag-doctor
+KIND_MODEL   ?= qwen2.5:0.5b
 AIRFLOW_URL  ?= http://localhost:8080
 AIRFLOW_AUTH ?= airflow:airflow
 AGENT_URL    ?= http://localhost:8000
@@ -10,7 +12,7 @@ EVAL_OUTPUT  ?= results/accuracy.md
 .DEFAULT_GOAL := help
 .PHONY: help install dev up down logs migrate pull-models trigger seed-failures \
         topic-tail evaluate test test-integration lint format typecheck check \
-        helm-lint kind-deploy clean
+        helm-lint kind-deploy kind-destroy clean
 
 help:  ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -76,13 +78,31 @@ typecheck:  ## Type-check the source tree
 
 check: lint typecheck test  ## The full quality gate
 
-helm-lint:  ## Lint and render the Helm chart
+helm-lint:  ## Lint and render the chart against every values file
 	helm lint $(CHART)
+	helm lint $(CHART) -f $(CHART)/values-local.yaml
+	helm lint $(CHART) -f $(CHART)/values-prod.yaml
 	helm template dag-doctor $(CHART) >/dev/null
+	helm template dag-doctor $(CHART) -f $(CHART)/values-local.yaml >/dev/null
+	helm template dag-doctor $(CHART) -f $(CHART)/values-prod.yaml >/dev/null
 
-kind-deploy:  ## Create a kind cluster and deploy the chart into it
-	kind create cluster --name $(KIND_CLUSTER) || true
-	helm upgrade --install dag-doctor $(CHART) -f $(CHART)/values-local.yaml --wait
+kind-deploy:  ## Create a kind cluster, load the image, and deploy the chart
+	kind create cluster --name $(KIND_CLUSTER) --wait 120s || true
+	kubectl apply -f deploy/kind/dependencies.yaml
+	kubectl -n $(NAMESPACE) wait --for=condition=available --timeout=300s \
+		deploy/postgres deploy/redpanda deploy/ollama
+	# The model has to exist before the agent starts, or readiness correctly reports
+	# that the provider is not usable and the rollout never completes.
+	kubectl -n $(NAMESPACE) exec deploy/ollama -- ollama pull $(KIND_MODEL)
+	docker build -f docker/Dockerfile -t dag-doctor:local .
+	kind load docker-image dag-doctor:local --name $(KIND_CLUSTER)
+	helm upgrade --install dag-doctor $(CHART) \
+		-f $(CHART)/values-local.yaml \
+		--namespace $(NAMESPACE) --wait --timeout 10m
+	kubectl -n $(NAMESPACE) get pods
+
+kind-destroy:  ## Delete the kind cluster
+	kind delete cluster --name $(KIND_CLUSTER)
 
 clean:  ## Remove caches and build artefacts
 	rm -rf .mypy_cache .pytest_cache .ruff_cache htmlcov .coverage coverage.xml dist build

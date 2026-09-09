@@ -1,0 +1,67 @@
+# What a production install changes. Not a drop-in: the DSNs and the secret reference are
+# specific to a cluster, and are left as obvious placeholders rather than plausible
+# defaults that might survive into a real deployment unnoticed.
+
+image:
+  repository: ghcr.io/pratikahir/dag-doctor
+  # Pinned deliberately. A floating tag makes a rollback a guess about what was running.
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+config:
+  appEnv: prod
+  logLevel: INFO
+
+  # A frontier model diagnoses noticeably better than a small local one, and the
+  # difference is largest on multi-step tool selection. See the accuracy table in the
+  # README before deciding this is not worth paying for.
+  llmProvider: anthropic
+  anthropicModel: claude-sonnet-5
+
+  # Triage is a cheap classification; forming a hypothesis is not. Splitting them is
+  # most of the cost saving available here.
+  nodeModels:
+    triage: claude-haiku-4-5-20251001
+    conclude: claude-sonnet-5
+
+  airflowBaseUrl: http://airflow-webserver.airflow.svc.cluster.local:8080
+  kafkaBootstrapServers: REPLACE-ME.kafka.svc.cluster.local:9092
+
+secrets:
+  # Nothing sensitive in git. Point this at a Secret produced by External Secrets, SOPS,
+  # or your cloud's secret manager.
+  create: false
+  existingSecret: dag-doctor-credentials
+
+api:
+  replicaCount: 3
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2
+
+worker:
+  replicaCount: 3
+  autoscaling:
+    # Needs Prometheus Adapter or KEDA publishing kafka_consumergroup_lag. Turning this
+    # on without one leaves an HPA that never scales and never says why.
+    enabled: true
+    minReplicas: 2
+    # Cap this at the failure topic's partition count. A consumer group cannot use more
+    # members than there are partitions, so anything above it is idle pods.
+    maxReplicas: 3
+    consumerLag:
+      enabled: true
+      targetLagPerPod: "20"
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      memory: 2Gi
+
+serviceMonitor:
+  enabled: true

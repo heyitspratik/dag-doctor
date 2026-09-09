@@ -1,0 +1,25 @@
+apiVersion: v2
+name: dag-doctor
+description: An autonomous agent that diagnoses failing Airflow pipelines.
+type: application
+
+# The chart version moves when the chart changes; appVersion tracks the application.
+# They are separate on purpose, because a values change is not a new agent.
+version: 0.1.0
+appVersion: "0.1.0"
+
+kubeVersion: ">=1.25.0-0"
+
+keywords:
+  - airflow
+  - data-engineering
+  - agent
+  - langgraph
+  - observability
+
+home: https://github.com/pratikahir/dag-doctor
+sources:
+  - https://github.com/pratikahir/dag-doctor
+maintainers:
+  - name: Pratik Ahir
+    url: https://github.com/pratikahir

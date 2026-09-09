@@ -1,0 +1,65 @@
+{{- if .Values.worker.autoscaling.enabled }}
+{{- /*
+Consumer lag is the metric that matters: the worker is not CPU bound, it spends its time
+waiting on a model, so CPU utilisation says almost nothing about whether incidents are
+piling up.
+
+That metric has to come from somewhere. Prometheus Adapter exposing
+kafka_consumergroup_lag as an external metric, or KEDA, are the usual answers. Without one
+the HPA reports the target as unknown and never scales, which is why this is off by
+default rather than shipped looking functional.
+
+Useful replicas are capped by the topic's partition count: a consumer group cannot have
+more active members than there are partitions, so maxReplicas above that buys idle pods.
+*/}}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "dag-doctor.fullname" . }}-worker
+  labels:
+    {{- include "dag-doctor.componentLabels" (dict "root" . "component" "worker") | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "dag-doctor.fullname" . }}-worker
+  minReplicas: {{ .Values.worker.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.worker.autoscaling.maxReplicas }}
+  metrics:
+    {{- if .Values.worker.autoscaling.consumerLag.enabled }}
+    - type: External
+      external:
+        metric:
+          name: {{ .Values.worker.autoscaling.consumerLag.metricName }}
+          selector:
+            matchLabels:
+              consumergroup: {{ .Values.config.kafkaConsumerGroup }}
+              topic: {{ .Values.config.kafkaTopicFailures }}
+        target:
+          type: AverageValue
+          averageValue: {{ .Values.worker.autoscaling.consumerLag.targetLagPerPod | quote }}
+    {{- end }}
+    {{- if gt (int .Values.worker.autoscaling.targetCPUUtilizationPercentage) 0 }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.worker.autoscaling.targetCPUUtilizationPercentage }}
+    {{- end }}
+  behavior:
+    scaleDown:
+      # Slow to scale down, because removing a member triggers a rebalance that pauses
+      # every other member. Reacting to a brief lull costs more than it saves.
+      stabilizationWindowSeconds: 600
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 300
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+{{- end }}
