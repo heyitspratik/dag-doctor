@@ -135,6 +135,16 @@ curl localhost:8000/api/v1/incidents/<id>/investigation | jq
 The first `make up` pulls several container images and `make pull-models` downloads roughly
 2 GB of model weights. After that everything is local and free.
 
+**If you already run Ollama**, port 11434 is taken and `make up` will fail on it. Either
+stop the local service, or keep it and reuse the models you already have:
+
+```bash
+sudo systemctl stop ollama                              # frees the port
+OLLAMA_MODELS=/usr/share/ollama/.ollama make up         # reuses your existing weights
+```
+
+`OLLAMA_MODELS` defaults to a named volume, so a fresh clone stays self-contained.
+
 To use a frontier model instead, set `LLM_PROVIDER=anthropic` and `ANTHROPIC_API_KEY` in
 `.env`. **No part of the test suite ever needs a key or a running Ollama.**
 

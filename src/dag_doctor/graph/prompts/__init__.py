@@ -15,7 +15,7 @@ from pathlib import Path
 from string import Template
 
 #: Bumped when a template changes in a way that could change behaviour.
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v3"
 
 _DIRECTORY = Path(__file__).parent
 

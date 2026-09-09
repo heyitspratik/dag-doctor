@@ -49,12 +49,19 @@ class Toolbox:
             lines.append(f"    arguments: {_render_arguments(tool)}")
         return "\n".join(lines)
 
-    async def run(self, name: str, arguments: Mapping[str, JsonValue]) -> Evidence:
+    async def run(
+        self,
+        name: str,
+        arguments: Mapping[str, JsonValue],
+        context: Mapping[str, JsonValue] | None = None,
+    ) -> Evidence:
         """Run one tool and record the outcome as evidence.
 
         Args:
             name: The tool the model asked for.
             arguments: The arguments it supplied, unvalidated.
+            context: Facts the investigation already knows, filled in for any argument the
+                tool declares and the model left out.
 
         Returns:
             An evidence record. Never raises: a tool that could not answer is a finding.
@@ -71,15 +78,53 @@ class Toolbox:
                 succeeded=False,
             )
 
-        result = await tool.run(arguments)
+        supplied = self._with_context(tool, arguments, context)
+        result = await tool.run(supplied)
         return Evidence(
             tool_name=name,
-            tool_input=dict(arguments),
+            tool_input=dict(supplied),
             result=result.payload(),
             summary=result.summarise(),
             succeeded=result.ok,
             duration_ms=result.duration_ms,
         )
+
+    def _with_context(
+        self,
+        tool: RunnableTool,
+        arguments: Mapping[str, JsonValue],
+        context: Mapping[str, JsonValue] | None,
+    ) -> dict[str, JsonValue]:
+        """Fill in the facts the investigation already holds.
+
+        Which DAG, task and run failed are properties of the incident, not choices a model
+        should be making. Requiring it to copy them into every call adds a failure mode
+        with no upside, and small models get them wrong often enough to lose an entire
+        investigation to it.
+
+        Only arguments the tool actually declares are filled, and anything the model did
+        supply wins, so it can still deliberately point a tool at a different task. A null
+        or empty value does not count as supplied: that is the model admitting it does not
+        know, which is exactly the case this exists to cover.
+        """
+        # A model that cannot fill a field emits null for it rather than leaving it out.
+        # Read literally that is a value, so it fails validation on a required argument
+        # and overrides a perfectly good default on an optional one.
+        supplied: dict[str, JsonValue] = {
+            key: value for key, value in arguments.items() if value is not None and value != ""
+        }
+        if not context:
+            return supplied
+        properties = tool.input_schema().get("properties")
+        declared = set(properties) if isinstance(properties, dict) else set()
+        known = {
+            key: value for key, value in context.items() if key in declared and key not in supplied
+        }
+        return {**known, **supplied}
+
+    def find(self, name: str) -> RunnableTool | None:
+        """Look a tool up, returning nothing rather than raising when it is not there."""
+        return self._tools.get(name)
 
     def require(self, name: str) -> RunnableTool:
         """Fetch a tool by name.

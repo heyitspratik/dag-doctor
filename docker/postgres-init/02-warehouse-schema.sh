@@ -4,4 +4,4 @@
 set -euo pipefail
 
 psql -v ON_ERROR_STOP=1 --username warehouse --dbname warehouse \
-    -f /docker-entrypoint-initdb.d/warehouse/01_baseline.sql
+    -f /seed/01_baseline.sql

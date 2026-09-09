@@ -11,6 +11,10 @@ USER airflow
 
 # Pinned, and deliberately few: anything installed here shares a resolver with Airflow's
 # own pins, so a loose constraint is how an Airflow image quietly stops booting.
+# Exactly what the callback's import closure needs beyond what Airflow already ships.
+# tests/unit/test_airflow_image.py computes that closure and fails if this list drifts
+# from it, because the symptom of a missing one is every DAG failing to import.
 RUN pip install --no-cache-dir \
         "aiokafka==0.14.0" \
-        "pydantic-settings>=2.6,<3.0"
+        "pydantic-settings>=2.6,<3.0" \
+        "structlog>=24.4,<27"

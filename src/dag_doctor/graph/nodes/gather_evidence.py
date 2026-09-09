@@ -8,11 +8,12 @@ failures. A tool that could not answer is something the investigation should kno
 
 from typing import ClassVar
 
-from pydantic import BaseModel, Field, JsonValue
+from pydantic import BaseModel
 
 from dag_doctor.core.logging import get_logger
 from dag_doctor.core.models import Evidence, NodeName
 from dag_doctor.graph import prompts
+from dag_doctor.graph.arguments import ArgumentResolver
 from dag_doctor.graph.model import ModelCaller
 from dag_doctor.graph.nodes.base import InvestigationNode, NodeUpdate
 from dag_doctor.graph.state import InvestigationState
@@ -26,17 +27,23 @@ MAX_CALLS_PER_ITERATION = 4
 
 
 class PlannedCall(BaseModel):
-    """One tool call the model wants made."""
+    """One tool the model wants called.
+
+    Deliberately no arguments. Asking for them here means asking against a free-form
+    object with no schema, and a small model answers that by inventing a shape: the
+    observed failure was every scalar wrapped in a dictionary. Arguments are resolved
+    afterwards against each tool's real model, by
+    :class:`dag_doctor.graph.arguments.ArgumentResolver`.
+    """
 
     tool: str
-    arguments: dict[str, JsonValue] = Field(default_factory=dict)
     why: str = ""
 
 
 class ToolPlan(BaseModel):
     """What the model is asked for when gathering evidence."""
 
-    calls: list[PlannedCall] = Field(default_factory=list)
+    calls: list[PlannedCall] = []
 
 
 class GatherEvidenceNode(InvestigationNode):
@@ -53,6 +60,7 @@ class GatherEvidenceNode(InvestigationNode):
         """
         self._caller = caller
         self._toolbox = toolbox
+        self._arguments = ArgumentResolver(caller, toolbox)
 
     async def run(self, state: InvestigationState) -> NodeUpdate:
         """Ask for a plan, run what the budget allows, and record the results."""
@@ -79,7 +87,8 @@ class GatherEvidenceNode(InvestigationNode):
 
         gathered: list[Evidence] = []
         for call in plan.value.calls[:allowed]:
-            gathered.append(await self._toolbox.run(call.tool, call.arguments))
+            arguments = await self._arguments.resolve(self.node, call.tool, state, call.why)
+            gathered.append(await self._toolbox.run(call.tool, arguments, state.tool_context()))
 
         return NodeUpdate(
             updates={

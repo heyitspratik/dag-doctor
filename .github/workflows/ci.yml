@@ -87,8 +87,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Kept in step with docker/airflow.Dockerfile by tests/unit/test_airflow_image.py.
       - name: Install what the failure callback needs
-        run: pip install --no-cache-dir "aiokafka==0.14.0" "pydantic-settings>=2.6,<3.0"
+        run: |
+          pip install --no-cache-dir \
+            "aiokafka==0.14.0" "pydantic-settings>=2.6,<3.0" "structlog>=24.4,<27"
 
       - name: Import every DAG file
         env:

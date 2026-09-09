@@ -1,5 +1,15 @@
 name: dag-doctor
 
+# The agent's own image, shared by the three services that run it. All three carry the
+# build so any one of them can produce it: a service declaring only `image:` makes compose
+# try to pull `dag-doctor:local` from a registry, which fails noisily before some other
+# service happens to build it, and fails outright if that service is not being started.
+x-agent-image: &agent-image
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile
+  image: dag-doctor:local
+
 # Image tags are pinned and overridable. Bumping one is a single variable, which matters
 # because a stale pin is the most common reason a cloned repository will not start.
 x-airflow-common: &airflow-common
@@ -47,9 +57,11 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./postgres-init:/docker-entrypoint-initdb.d:ro
-      # A subdirectory, so the entrypoint ignores it and 02-warehouse-schema.sh decides
-      # which of these files to run and in what order.
-      - ../airflow/seed:/docker-entrypoint-initdb.d/warehouse:ro
+      # Mounted outside the init directory, not under it. Docker has to create the
+      # mountpoint, and it cannot do that inside a read-only bind mount. Keeping it
+      # separate also stops the entrypoint from trying to run the seed files itself:
+      # 02-warehouse-schema.sh decides which of them run, and in what order.
+      - ../airflow/seed:/seed:ro
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     healthcheck:
@@ -88,11 +100,16 @@ services:
       redpanda:
         condition: service_healthy
     entrypoint: ["/bin/bash", "-c"]
-    # Idempotent: re-running the stack must not fail because the topics already exist.
-    command: >
-      "rpk topic create airflow.task.failed agent.diagnosis.completed airflow.task.failed.dlq
-       --brokers redpanda:9092 --partitions 3 --replicas 1 || true;
-       rpk topic list --brokers redpanda:9092"
+    # A literal block, not a folded one. YAML folding keeps the newlines on lines that are
+    # more indented than the first, so a folded multi-line command reaches bash as several
+    # commands and every continuation flag becomes a command name.
+    command:
+      - |
+        set -euo pipefail
+        # Idempotent: re-running the stack must not fail because the topics exist.
+        rpk topic create airflow.task.failed agent.diagnosis.completed airflow.task.failed.dlq \
+          --brokers redpanda:9092 --partitions 3 --replicas 1 || true
+        rpk topic list --brokers redpanda:9092
     restart: "no"
 
   ollama:
@@ -100,7 +117,11 @@ services:
     ports:
       - "${OLLAMA_PORT:-11434}:11434"
     volumes:
-      - ollama-models:/root/.ollama
+      # A named volume by default, so a fresh clone is self-contained. Point
+      # OLLAMA_MODELS at an existing store, /usr/share/ollama/.ollama on a systemd
+      # install, to reuse models you have already pulled instead of downloading them
+      # twice.
+      - ${OLLAMA_MODELS:-ollama-models}:/root/.ollama
     healthcheck:
       test: ["CMD-SHELL", "ollama list >/dev/null 2>&1"]
       interval: 10s
@@ -109,10 +130,7 @@ services:
       start_period: 30s
 
   migrate:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-    image: dag-doctor:local
+    <<: *agent-image
     environment:
       POSTGRES_DSN: postgresql+psycopg://dagdoctor:dagdoctor@postgres:5432/dag_doctor
     command: ["alembic", "upgrade", "head"]
@@ -122,7 +140,7 @@ services:
     restart: "no"
 
   agent-worker:
-    image: dag-doctor:local
+    <<: *agent-image
     environment:
       APP_ENV: ${APP_ENV:-dev}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -140,10 +158,26 @@ services:
         condition: service_completed_successfully
       redpanda-init:
         condition: service_completed_successfully
+    # Must be overridden, not inherited. The image's own HEALTHCHECK probes the API on
+    # 8000, and the worker serves nothing there; left alone it reports unhealthy forever
+    # while consuming perfectly well. Its metrics endpoint answering is the evidence
+    # available that the process is alive, which is what the Helm chart probes too.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import urllib.request, sys
+          sys.exit(0 if urllib.request.urlopen("http://127.0.0.1:9100/metrics", timeout=4).status == 200 else 1)
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
     restart: unless-stopped
 
   agent-api:
-    image: dag-doctor:local
+    <<: *agent-image
     command: ["dag-doctor-api"]
     environment:
       APP_ENV: ${APP_ENV:-dev}
@@ -177,11 +211,21 @@ services:
   airflow-init:
     <<: *airflow-common
     entrypoint: ["/bin/bash", "-c"]
-    command: >
-      "airflow db migrate &&
-       airflow users create --username ${AIRFLOW_USERNAME:-airflow}
-         --password ${AIRFLOW_PASSWORD:-airflow} --firstname Dag --lastname Doctor
-         --role Admin --email dag-doctor@example.com || true"
+    command:
+      - |
+        set -euo pipefail
+        airflow db migrate
+        # Checked rather than forced with `|| true`. Creating the user has to be
+        # idempotent, because `make up` runs against an existing volume, but it also has
+        # to fail loudly: the REST API and the evaluation harness both authenticate as
+        # this user, and a swallowed failure here surfaces much later as a 401.
+        if ! airflow users list | grep -qw "${AIRFLOW_USERNAME:-airflow}"; then
+          airflow users create \
+            --username "${AIRFLOW_USERNAME:-airflow}" \
+            --password "${AIRFLOW_PASSWORD:-airflow}" \
+            --firstname Dag --lastname Doctor \
+            --role Admin --email dag-doctor@example.com
+        fi
     restart: "no"
 
   airflow-scheduler:

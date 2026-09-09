@@ -112,6 +112,15 @@ class RunnableTool(Protocol):
         """What the tool does, as shown to the model."""
         ...
 
+    @property
+    def input_model(self) -> type[ToolInput]:
+        """The model this tool's arguments are validated against.
+
+        Exposed so the graph can ask a model for arguments against the real schema rather
+        than a free-form object. A model given no schema invents a shape.
+        """
+        ...
+
     def input_schema(self) -> dict[str, JsonValue]:
         """The JSON schema for this tool's arguments."""
         ...
@@ -172,11 +181,7 @@ class BaseTool[InputT: ToolInput, OutputT: ToolOutput](ABC):
         try:
             tool_input = self.input_model.model_validate(dict(raw_input))
         except ValidationError as exc:
-            return self._failed(
-                ToolStatus.INVALID_INPUT,
-                f"{exc.error_count()} invalid argument(s) for {self.name}",
-                started,
-            )
+            return self._failed(ToolStatus.INVALID_INPUT, self._explain(exc), started)
 
         try:
             data = await asyncio.wait_for(self.execute(tool_input), timeout=self.timeout_s)
@@ -205,6 +210,28 @@ class BaseTool[InputT: ToolInput, OutputT: ToolOutput](ABC):
         )
         logger.debug("tool.ok", tool=self.name, duration_ms=result.duration_ms)
         return result
+
+    def _explain(self, exc: ValidationError) -> str:
+        """Say which arguments were wrong, and what the tool actually takes.
+
+        A count on its own tells nobody anything. This message is read by a model that
+        may retry the call, so it has to carry enough to correct it: which field was
+        rejected, why, and the full signature to compare against.
+        """
+        problems = "; ".join(
+            f"{'.'.join(str(part) for part in error['loc']) or '(root)'}: {error['msg']}"
+            for error in exc.errors()[:5]
+        )
+        schema = self.input_schema()
+        properties = schema.get("properties")
+        required = schema.get("required")
+        required_names = set(required) if isinstance(required, list) else set()
+        signature = (
+            ", ".join(f"{name}{'' if name in required_names else '?'}" for name in properties)
+            if isinstance(properties, dict)
+            else "none"
+        )
+        return f"{self.name} rejected its arguments: {problems}. It takes: {signature}"
 
     def _failed(self, status: ToolStatus, error: str, started: float) -> ToolResult:
         """Build a failure result and log it once."""

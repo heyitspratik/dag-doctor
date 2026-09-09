@@ -139,6 +139,20 @@ class InvestigationState(BaseModel):
             key=lambda hypothesis: hypothesis.rank,
         )
 
+    def tool_context(self) -> dict[str, JsonValue]:
+        """The facts every tool call about this incident should start from.
+
+        Handed to the toolbox so a model does not have to copy the identifiers into each
+        call. They describe the incident rather than anything the model decides, and a
+        model that wants a different task can still say so.
+        """
+        return {
+            "dag_id": self.failure.dag_id,
+            "task_id": self.failure.task_id,
+            "run_id": self.failure.run_id,
+            "try_number": self.failure.try_number,
+        }
+
     def next_sequence(self) -> int:
         """The sequence number for the next step in the trace."""
         return len(self.steps) + 1

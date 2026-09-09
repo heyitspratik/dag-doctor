@@ -15,6 +15,11 @@ $refuted
 Tools available for testing:
 $tools
 
+Every hypothesis must name a test_tool, and it must be one of the tools listed above,
+copied exactly. A hypothesis with no tool to run against cannot be refuted, and will be
+discarded. Name the tool only: its arguments are worked out separately, against that tool's
+own schema.
+
 Propose up to $max_hypotheses hypotheses, best first. Each one must state a specific
 cause, not a restatement of the symptom, and must carry a test that could refute it: a
 single tool call whose result would tell you that you are wrong. A hypothesis nothing

@@ -10,7 +10,7 @@ back to them, which is the failure mode a loop invites.
 
 from typing import ClassVar
 
-from pydantic import BaseModel, Field, JsonValue
+from pydantic import BaseModel, Field
 
 from dag_doctor.core.models import Hypothesis, NodeName, RootCauseCategory
 from dag_doctor.graph import prompts
@@ -28,8 +28,11 @@ class ProposedHypothesis(BaseModel):
     statement: str = Field(min_length=1)
     category: RootCauseCategory
     proposed_test: str = Field(min_length=1)
-    test_tool: str | None = None
-    test_arguments: dict[str, JsonValue] = Field(default_factory=dict)
+    #: Required, and constrained to a tool that exists. A hypothesis nothing can run
+    #: against is not falsifiable, so test_hypothesis can only ever return inconclusive
+    #: and the loop spins until the budget dies. Left optional, a small model omits it
+    #: every time and no investigation can ever conclude.
+    test_tool: str = Field(min_length=1)
     #: Evidence numbers as shown in the prompt, one-based. Numbers rather than identifiers
     #: because a model asked for a UUID will cheerfully invent one.
     supporting_evidence: list[int] = Field(default_factory=list)
@@ -120,7 +123,6 @@ def _to_hypothesis(
         root_cause_category=candidate.category,
         proposed_test=candidate.proposed_test,
         test_tool=candidate.test_tool,
-        test_arguments=candidate.test_arguments,
         rank=rank,
         supporting_evidence_ids=supporting,
         responsible_dag_id=candidate.responsible_dag_id,

@@ -13,7 +13,7 @@ EXAMPLE_OUTPUT ?= results/worked-example.md
 
 .DEFAULT_GOAL := help
 .PHONY: help install dev up down logs migrate pull-models trigger seed-failures \
-        topic-tail example evaluate test test-integration lint format typecheck check \
+        topic-tail reset-warehouse baseline example evaluate test test-integration lint format typecheck check \
         helm-lint kind-deploy kind-destroy clean
 
 help:  ## Show this help
@@ -50,7 +50,14 @@ trigger:  ## Trigger one DAG: make trigger DAG=schema_drift_orders
 		| head -c 400
 	@echo
 
-seed-failures:  ## Trigger every seeded DAG so the agent has incidents to diagnose
+reset-warehouse:  ## Undo the damage the seeded DAGs do, so they can be run again
+	$(COMPOSE) exec -T postgres psql -v ON_ERROR_STOP=1 -U warehouse -d warehouse \
+		-f /seed/00_reset.sql
+
+baseline: reset-warehouse  ## Record the warehouse's shape before anything breaks it
+	$(COMPOSE) exec -T agent-worker python -m dag_doctor.evaluation.baseline
+
+seed-failures: baseline  ## Trigger every seeded DAG so the agent has incidents to diagnose
 	$(UV) run python -m dag_doctor.evaluation.runner seed --agent-url $(AGENT_URL)
 
 topic-tail:  ## Print what is currently on the failure topic
@@ -61,7 +68,7 @@ example:  ## Render the latest investigation of $(EXAMPLE_DAG) as markdown
 	$(UV) run python -m dag_doctor.evaluation.runner trace \
 		--agent-url $(AGENT_URL) --dag-id $(EXAMPLE_DAG) --output $(EXAMPLE_OUTPUT)
 
-evaluate:  ## Trigger the scenarios, wait for diagnoses, print the accuracy table
+evaluate: baseline  ## Trigger the scenarios, wait for diagnoses, print the accuracy table
 	$(UV) run python -m dag_doctor.evaluation.runner evaluate \
 		--agent-url $(AGENT_URL) --output $(EVAL_OUTPUT)
 

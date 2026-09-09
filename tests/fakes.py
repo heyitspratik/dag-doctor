@@ -7,6 +7,7 @@ only the model and the tools replaced. Nothing here touches a network.
 """
 
 from collections.abc import Mapping, Sequence
+from typing import cast
 
 from pydantic import BaseModel
 
@@ -35,7 +36,9 @@ class ScriptedCaller:
     ) -> None:
         self._script = {node: list(answers) for node, answers in script.items()}
         self._model_used = model_used
-        self.calls: list[tuple[str, str]] = []
+        #: node, prompt, and the model asked for, so planning calls can be told apart
+        #: from the follow-up calls that resolve one tool's arguments.
+        self.calls: list[tuple[str, str, str]] = []
         self.failures: dict[str, Exception] = {}
 
     def fail_at(self, node: str, error: Exception) -> None:
@@ -43,19 +46,38 @@ class ScriptedCaller:
         self.failures[node] = error
 
     def call_count(self, node: str) -> int:
-        """How many times a node asked the model."""
-        return sum(1 for called, _prompt in self.calls if called == node)
+        """How many times a node planned, ignoring the calls that resolve arguments."""
+        return sum(
+            1
+            for called, _prompt, model in self.calls
+            if called == node and not model.endswith("Choice")
+        )
 
     def prompt_for(self, node: str) -> str:
-        """The most recent prompt a node sent."""
-        return next(prompt for called, prompt in reversed(self.calls) if called == node)
+        """The most recent planning prompt a node sent."""
+        return next(
+            prompt
+            for called, prompt, model in reversed(self.calls)
+            if called == node and not model.endswith("Choice")
+        )
 
     async def call[T: BaseModel](
         self, node: NodeName, prompt: str, output_model: type[T]
     ) -> ModelCall[T]:
-        self.calls.append((node, prompt))
+        self.calls.append((node, prompt, output_model.__name__))
         if node in self.failures:
             raise self.failures[node]
+
+        # Argument resolution asks against a model generated from one tool's schema. Those
+        # are not worth scripting per test: the stub tools accept defaults, and what these
+        # tests are about is routing, the loop and the budgets.
+        if output_model.__name__.endswith("Choice"):
+            return ModelCall(
+                value=cast(T, output_model.model_construct()),
+                model_used=self._model_used,
+                prompt_tokens=3,
+                completion_tokens=2,
+            )
 
         answers = self._script.get(node)
         if not answers:
@@ -77,8 +99,10 @@ class StubInput(ToolInput):
     dag_id: str = ""
     task_id: str = ""
     run_id: str = ""
+    try_number: int = 1
     table: str = ""
     connection: str = ""
+    as_of: str | None = None
 
 
 class StubOutput(ToolOutput):
@@ -123,7 +147,7 @@ def tool_plan(*tools: str) -> ToolPlan:
 
 def hypothesis_set(
     statement: str = "orders.customer_id was renamed to customer_uuid upstream",
-    test_tool: str | None = "compare_schema_snapshot",
+    test_tool: str = "compare_schema_snapshot",
     category: RootCauseCategory = RootCauseCategory.SCHEMA_DRIFT,
     supporting: Sequence[int] = (1,),
 ) -> HypothesisSet:

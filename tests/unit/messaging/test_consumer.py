@@ -291,3 +291,63 @@ async def test_starting_a_dead_letter_publisher_twice_connects_once(kafka_settin
     await publisher.stop()
 
     assert dlq_producer.stop_calls == 1
+
+
+async def test_an_unexpected_error_is_dead_lettered_rather_than_killing_the_worker(
+    kafka_settings, failure_event, dead_letters, dlq_producer
+):
+    # The handler catching only DagDoctorError let a plain ValidationError escape the
+    # retry path, kill the worker, and leave the offset uncommitted. Kafka redelivered and
+    # it died again: 41 restarts on one message before anyone noticed. An unexpected error
+    # is precisely what the dead-letter topic is for.
+    async def handler(_event):
+        raise ValueError("something nobody anticipated")
+
+    consumer = await _consumer(kafka_settings, handler, [_record(failure_event)], dead_letters)
+    await consumer.run()
+
+    parked = DeadLetterMessage.model_validate_json(dlq_producer.records[0][1])
+    assert parked.reason == "unexpected_error"
+    assert "something nobody anticipated" in parked.error
+    # The offset moves on, so the message cannot be redelivered forever.
+    assert len(consumer._consumer.commits) == 1
+
+
+async def test_an_unexpected_error_is_retried_before_being_given_up_on(
+    kafka_settings, failure_event, dead_letters, dlq_producer
+):
+    attempts = {"n": 0}
+
+    async def handler(_event):
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise RuntimeError("transient, and not one of ours")
+
+    consumer = await _consumer(kafka_settings, handler, [_record(failure_event)], dead_letters)
+    await consumer.run()
+
+    assert attempts["n"] == 3
+    assert dlq_producer.records == []
+
+
+async def test_one_poison_message_does_not_stop_the_ones_behind_it(
+    kafka_settings, failure_event, dead_letters
+):
+    # The point of dead-lettering: a message nobody can process must not starve the
+    # partition behind it.
+    seen: list[str] = []
+
+    async def handler(event):
+        if event.task_id == "poison":
+            raise ValueError("unprocessable")
+        seen.append(event.task_id)
+
+    records = [
+        _record(failure_event.model_copy(update={"task_id": "poison"}), offset=1),
+        _record(failure_event.model_copy(update={"task_id": "healthy"}), offset=2),
+    ]
+    consumer = await _consumer(kafka_settings, handler, records, dead_letters)
+    await consumer.run()
+
+    assert seen == ["healthy"]
+    assert len(consumer._consumer.commits) == 2

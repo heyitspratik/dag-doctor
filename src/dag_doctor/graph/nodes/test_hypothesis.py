@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from dag_doctor.core.models import Evidence, HypothesisOutcome, NodeName
 from dag_doctor.graph import prompts
+from dag_doctor.graph.arguments import ArgumentResolver
 from dag_doctor.graph.model import ModelCaller
 from dag_doctor.graph.nodes.base import InvestigationNode, NodeUpdate
 from dag_doctor.graph.state import InvestigationState
@@ -41,6 +42,7 @@ class TestHypothesisNode(InvestigationNode):
         """
         self._caller = caller
         self._toolbox = toolbox
+        self._arguments = ArgumentResolver(caller, toolbox)
 
     async def run(self, state: InvestigationState) -> NodeUpdate:
         """Run the hypothesis's test and record whether it survived."""
@@ -53,8 +55,11 @@ class TestHypothesisNode(InvestigationNode):
 
         evidence: list[Evidence] = []
         if hypothesis.test_tool and state.tool_calls_remaining > 0:
+            arguments = dict(hypothesis.test_arguments) or await self._arguments.resolve(
+                self.node, hypothesis.test_tool, state, hypothesis.proposed_test
+            )
             evidence.append(
-                await self._toolbox.run(hypothesis.test_tool, hypothesis.test_arguments)
+                await self._toolbox.run(hypothesis.test_tool, arguments, state.tool_context())
             )
             test_result = evidence[0].summary
         elif hypothesis.test_tool:

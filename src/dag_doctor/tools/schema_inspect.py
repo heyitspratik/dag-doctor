@@ -247,15 +247,50 @@ class CompareSchemaSnapshot(BaseTool[SchemaSnapshotInput, SchemaDiff]):
         self, session: AsyncSession, connection: str, table: str, columns: list[ColumnSpec]
     ) -> None:
         """Store the current shape so the next comparison has something to compare to."""
-        session.add(
-            SchemaSnapshot(
-                connection=connection,
-                table_name=table,
-                columns=[column.model_dump() for column in columns],
-                captured_at=datetime.now(UTC),
-            )
+        record_snapshot(session, connection, table, columns)
+
+
+def record_snapshot(
+    session: AsyncSession, connection: str, table: str, columns: list[ColumnSpec]
+) -> None:
+    """Write a snapshot of a table's current shape.
+
+    Separate from the tool because establishing a baseline and diffing against one are
+    different jobs. The tool only records when nothing is there, which is right for a diff
+    and wrong for a baseline: a stale snapshot would silently survive and every later
+    comparison would be against the wrong reference.
+
+    Args:
+        session: A session on the agent's own database.
+        connection: The named connection the table lives on.
+        table: The qualified table name.
+        columns: Its columns as they are now.
+    """
+    session.add(
+        SchemaSnapshot(
+            connection=connection,
+            table_name=table,
+            columns=[column.model_dump() for column in columns],
+            captured_at=datetime.now(UTC),
         )
-        logger.info("schema.snapshot_recorded", connection=connection, table=table)
+    )
+    logger.info("schema.snapshot_recorded", connection=connection, table=table)
+
+
+async def reflect_columns(
+    connections: ConnectionRegistry, connection: str, table: str
+) -> list[ColumnSpec]:
+    """Read a table's current columns.
+
+    Args:
+        connections: The connections a tool may name.
+        connection: Which one to read.
+        table: The table, as ``schema.table`` or ``table``.
+
+    Returns:
+        Its columns.
+    """
+    return await _reflect(connections, connection, TableRef.parse(table))
 
 
 def _diff(

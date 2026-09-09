@@ -15,6 +15,9 @@ $evidence
 Tools available:
 $tools
 
+Name the tools only. You are not asked for arguments here, and will be asked for each
+tool's arguments separately, against that tool's own schema.
+
 You may request up to $max_calls calls. $budget_note
 
 Pick the calls that could most change your mind. Do not repeat a call that has already

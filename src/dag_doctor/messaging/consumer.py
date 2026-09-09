@@ -245,6 +245,29 @@ class FailureConsumer:
                     task_id=event.task_id,
                 )
                 await self._sleep(RETRY_BACKOFF_S * attempt)
+            except Exception as exc:
+                # Deliberately broad, and the most important handler here. Anything the
+                # handler did not anticipate would otherwise escape the retry and
+                # dead-letter path entirely: the worker dies, the offset is never
+                # committed, Kafka redelivers, and it dies again. One malformed message
+                # becomes an unbounded crash loop, which is exactly what the dead-letter
+                # topic exists to prevent. Seen in practice: a datetime where the evidence
+                # record wanted JSON, 41 restarts on one message.
+                if attempt == attempts:
+                    return await self._park(
+                        record,
+                        reason="unexpected_error",
+                        error=f"{type(exc).__name__}: {exc}",
+                        attempts=attempt,
+                    )
+                logger.exception(
+                    "message.unexpected_error",
+                    attempt=attempt,
+                    of=attempts,
+                    dag_id=event.dag_id,
+                    task_id=event.task_id,
+                )
+                await self._sleep(RETRY_BACKOFF_S * attempt)
             else:
                 return True
         return True

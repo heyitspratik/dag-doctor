@@ -76,13 +76,21 @@ async def test_testing_without_a_hypothesis_does_nothing_rather_than_failing(
 async def test_a_hypothesis_with_no_executable_test_is_judged_on_what_is_known(
     toolbox, budgets, failure_event
 ):
-    caller = ScriptedCaller(
-        {
-            "form_hypothesis": [hypothesis_set(test_tool=None)],
-            "test_hypothesis": [verdict("inconclusive", notes="nothing discriminated")],
-        }
+    # The schema now requires a test tool, so this cannot arrive from the model. It can
+    # still arrive from a hypothesis persisted before that requirement, and the node
+    # should judge on the evidence rather than fall over.
+    from dag_doctor.core.models import Hypothesis, RootCauseCategory
+
+    untestable = Hypothesis(
+        statement="a column was renamed",
+        root_cause_category=RootCauseCategory.SCHEMA_DRIFT,
+        proposed_test="look at it and think hard",
+        test_tool=None,
     )
-    state = await _formed(caller, toolbox, _state(failure_event, budgets))
+    caller = ScriptedCaller(
+        {"test_hypothesis": [verdict("inconclusive", notes="nothing discriminated")]}
+    )
+    state = _state(failure_event, budgets, current_hypothesis=untestable)
 
     updates = await TestHypothesisNode(caller, toolbox)(state)
 
