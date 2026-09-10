@@ -98,20 +98,9 @@ jobs:
             -v "$PWD/airflow/dags:/opt/airflow/dags:ro" \
             -v "$PWD/airflow/seed:/opt/airflow/seed:ro" \
             -v "$PWD/src:/opt/airflow/dag_doctor_src:ro" \
+            -v "$PWD/docker/parse-dags.sh:/parse-dags.sh:ro" \
             dag-doctor-airflow:ci \
-            bash -c '
-              airflow db migrate >/dev/null 2>&1
-              python - <<PY
-              from airflow.models import DagBag
-
-              bag = DagBag("/opt/airflow/dags", include_examples=False)
-              for path, error in bag.import_errors.items():
-                  print(f"::error file={path}::{error}")
-              if bag.import_errors:
-                  raise SystemExit(1)
-              print("Parsed:", ", ".join(sorted(bag.dag_ids)))
-              PY
-            '
+            bash /parse-dags.sh
 
   helm:
     name: Lint and render the chart

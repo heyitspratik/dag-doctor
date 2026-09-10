@@ -15,6 +15,7 @@ ROOT = Path(__file__).parents[2]
 SRC = ROOT / "src"
 DOCKERFILE = (ROOT / "docker" / "airflow.Dockerfile").read_text()
 CI = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+PARSE_SCRIPT = (ROOT / "docker" / "parse-dags.sh").read_text()
 
 CALLBACK = "dag_doctor.messaging.airflow_callback"
 
@@ -74,7 +75,23 @@ def test_the_dag_parsing_ci_job_builds_the_image_rather_than_restating_it():
     # from. Building the real image instead makes the Dockerfile the only source of
     # truth, and parses the DAGs against what the stack actually runs.
     assert "docker/airflow.Dockerfile" in CI
-    assert "DagBag" in CI
+    assert "docker/parse-dags.sh" in CI
+
+
+def test_the_parse_script_is_a_file_rather_than_embedded_in_the_workflow():
+    # It was a Python heredoc inside a bash -c inside a YAML block scalar. The
+    # indentation YAML requires stopped bash finding the terminator, so Python received
+    # the whole script indented. A file has one level of quoting and can be run locally
+    # exactly as CI runs it.
+    assert "DagBag" not in CI
+    assert "DagBag" in PARSE_SCRIPT
+
+
+def test_an_empty_dagbag_is_not_treated_as_a_pass():
+    # Nothing found is what a mounting mistake looks like, and it would otherwise report
+    # success while checking nothing at all.
+    assert "no DAGs were found" in PARSE_SCRIPT
+    assert "set -euo pipefail" in PARSE_SCRIPT
 
 
 def test_the_callback_does_not_drag_in_the_agent_itself():
