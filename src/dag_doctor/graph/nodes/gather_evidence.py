@@ -114,6 +114,11 @@ class GatherEvidenceNode(InvestigationNode):
                 "evidence": [*state.evidence, *gathered],
                 "tool_calls_made": state.tool_calls_made + len(gathered),
                 "iteration": state.iteration + 1,
+                # A round that gathered nothing new has nothing left to give. Small models
+                # re-request the same tools every iteration despite the prompt forbidding
+                # it, and without this the loop spends its whole budget re-reading what it
+                # already has and then escalates as though the failure were ambiguous.
+                "evidence_exhausted": not gathered,
             },
             step_input={
                 "requested": [call.tool for call in plan.value.calls],
@@ -123,6 +128,7 @@ class GatherEvidenceNode(InvestigationNode):
                 "ran": [item.tool_name for item in gathered],
                 "succeeded": [item.tool_name for item in gathered if item.succeeded],
                 "already_known": repeated,
+                "new_evidence": len(gathered),
             },
             model_used=plan.model_used,
             prompt_tokens=plan.prompt_tokens,

@@ -11,6 +11,7 @@ turns the agent from a black box into something a human can audit, and it is the
 the investigation is worth trusting at all.
 """
 
+import json
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -75,6 +76,11 @@ class InvestigationState(BaseModel):
     tool_calls_made: int = 0
     max_tool_calls: int = 20
 
+    #: Set when a gather round produced no evidence the investigation did not already
+    #: hold. Running out of information is a different condition from running out of
+    #: budget, and only this one means another round would return the same answers.
+    evidence_exhausted: bool = False
+
     diagnosis: Diagnosis | None = None
     halt_reason: HaltReason | None = None
 
@@ -119,6 +125,54 @@ class InvestigationState(BaseModel):
         return [item for item in self.evidence if item.succeeded]
 
     @property
+    def known_task_ids(self) -> set[str]:
+        """Task ids named outright by the upstream state tool, for prompting.
+
+        A hint rather than the rule: it is the set a conclusion can be steered towards,
+        but a task learned from the DAG source instead is just as real, so enforcement
+        uses :meth:`has_seen_task`.
+        """
+        found = {self.failure.task_id}
+        for item in self.evidence:
+            upstream = item.result.get("upstream")
+            if isinstance(upstream, list):
+                for entry in upstream:
+                    if not isinstance(entry, dict):
+                        continue
+                    task_id = entry.get("task_id")
+                    if isinstance(task_id, str):
+                        found.add(task_id)
+            root_failure = item.result.get("root_failure")
+            if isinstance(root_failure, str):
+                found.add(root_failure)
+        return found
+
+    def has_seen_task(self, task_id: str) -> bool:
+        """Whether any evidence actually mentions a task by this name.
+
+        Attribution is only meaningful against a task that exists. Asked to name the task
+        responsible, a model will otherwise answer with whatever string is to hand: one
+        live run blamed the tool ``fetch_task_logs``.
+
+        The test is deliberately loose. Narrowing it to tasks the upstream tool listed
+        would reject a correct answer read out of the DAG source, and discarding a right
+        answer is worse than the fabrication this guards against.
+
+        Only what a tool reported is searched, never the envelope around it. The envelope
+        carries the tool's own name, so searching it would accept ``fetch_task_logs`` as a
+        task and defeat the entire check.
+
+        Args:
+            task_id: The task name the model proposed.
+
+        Returns:
+            Whether the investigation saw that name anywhere it looked.
+        """
+        if task_id == self.failure.task_id:
+            return True
+        return any(task_id in _reported(item) for item in self.evidence)
+
+    @property
     def refuted_hypotheses(self) -> list[Hypothesis]:
         """Hypotheses that were tested and did not survive."""
         return [
@@ -156,3 +210,13 @@ class InvestigationState(BaseModel):
     def next_sequence(self) -> int:
         """The sequence number for the next step in the trace."""
         return len(self.steps) + 1
+
+
+def _reported(item: Evidence) -> str:
+    """What one tool actually said, without the envelope that names the tool.
+
+    The payload wraps every result in ``tool``, ``status`` and ``error`` keys. Searching
+    those for a task name would match the tool's own name, which is exactly the mistake
+    this is here to catch.
+    """
+    return f"{item.summary}\n{json.dumps(item.result.get('data'), default=str)}"

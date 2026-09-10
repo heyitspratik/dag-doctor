@@ -103,6 +103,44 @@ def test_a_budget_that_runs_out_while_gathering_escalates(failure_event, budgets
     assert after_gather_evidence(state) == "escalate"
 
 
+def test_a_round_that_learns_nothing_new_concludes_instead_of_looping(failure_event, budgets):
+    # The loop exists to gather more, so a round that gathered nothing has nowhere left to
+    # go. Spending the rest of the budget re-reading the same evidence would report an
+    # ambiguous failure where there was an exhausted one.
+    state = _state(
+        failure_event,
+        budgets,
+        iteration=1,
+        tool_calls_made=4,
+        evidence=_evidence("fetch_task_logs"),
+        evidence_exhausted=True,
+        hypotheses=[_hypothesis(HypothesisOutcome.REFUTED)],
+    )
+
+    assert after_gather_evidence(state) == "conclude"
+
+
+def test_exhausted_evidence_still_forms_a_first_hypothesis(failure_event, budgets):
+    # Nothing has been proposed yet, so concluding here would conclude from triage alone
+    # while the evidence that was gathered went unused.
+    state = _state(failure_event, budgets, iteration=1, tool_calls_made=4, evidence_exhausted=True)
+
+    assert after_gather_evidence(state) == "form_hypothesis"
+
+
+def test_an_exhausted_round_still_escalates_when_the_budget_is_gone(failure_event, budgets):
+    # Budget exhaustion is the stronger signal: it is reported as its own halt reason.
+    state = _state(
+        failure_event,
+        budgets,
+        iteration=5,
+        evidence_exhausted=True,
+        hypotheses=[_hypothesis(HypothesisOutcome.REFUTED)],
+    )
+
+    assert after_gather_evidence(state) == "escalate"
+
+
 def test_a_hypothesis_is_tested_once_it_is_formed(failure_event, budgets):
     state = _state(
         failure_event, budgets, current_hypothesis=_hypothesis(HypothesisOutcome.UNTESTED)

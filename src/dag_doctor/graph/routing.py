@@ -18,7 +18,7 @@ from dag_doctor.graph.confidence import compute_confidence
 from dag_doctor.graph.state import InvestigationState
 
 type TriageRoute = Literal["conclude", "gather_evidence", "escalate"]
-type GatherRoute = Literal["form_hypothesis", "escalate"]
+type GatherRoute = Literal["form_hypothesis", "conclude", "escalate"]
 type FormRoute = Literal["test_hypothesis", "escalate"]
 type TestRoute = Literal["conclude", "gather_evidence", "escalate"]
 
@@ -58,7 +58,16 @@ def after_triage(state: InvestigationState, budgets: BudgetSettings) -> TriageRo
 
 
 def after_gather_evidence(state: InvestigationState) -> GatherRoute:
-    """Move on to forming a hypothesis, unless the budget ran out gathering.
+    """Move on to forming a hypothesis, unless the budget or the evidence ran out.
+
+    A round that gathered nothing new ends the investigation on what it has. Looping again
+    would re-run the same tools for the same answers, so the remaining budget buys nothing
+    and spending it would report an ambiguous failure where there was really an exhausted
+    one. Concluding here cannot manufacture certainty: the confidence is computed from the
+    evidence, so a thin investigation still scores low and says so.
+
+    Requires a hypothesis to already exist, so a first round that gathers nothing still
+    gets its chance to form one rather than concluding from triage alone.
 
     Args:
         state: The investigation after a round of tool calls.
@@ -68,6 +77,8 @@ def after_gather_evidence(state: InvestigationState) -> GatherRoute:
     """
     if _halted(state) or state.budget_exhausted:
         return "escalate"
+    if state.evidence_exhausted and state.hypotheses:
+        return "conclude"
     return "form_hypothesis"
 
 

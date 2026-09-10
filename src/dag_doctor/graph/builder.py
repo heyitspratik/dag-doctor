@@ -83,7 +83,13 @@ def build_graph(
     graph.add_conditional_edges(
         "gather_evidence",
         after_gather_evidence,
-        {"form_hypothesis": "form_hypothesis", "escalate": "escalate"},
+        # conclude is the exhaustion exit: a round that learned nothing new ends here
+        # rather than looping to re-read evidence the investigation already holds.
+        {
+            "form_hypothesis": "form_hypothesis",
+            "conclude": "conclude",
+            "escalate": "escalate",
+        },
     )
     graph.add_conditional_edges(
         "form_hypothesis",
