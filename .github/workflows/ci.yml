@@ -19,7 +19,7 @@ jobs:
     name: Lint, types, unit tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v5
@@ -59,7 +59,7 @@ jobs:
     # testcontainers starts its own Postgres, so the versions here match what the compose
     # stack runs rather than whatever a service container happened to pin.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v5
@@ -80,7 +80,7 @@ jobs:
     name: Parse the seeded DAGs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Built rather than pulled, so this parses the DAGs against the image the stack
       # actually runs, and the callback's dependencies come from one place instead of
@@ -106,7 +106,7 @@ jobs:
     name: Lint and render the chart
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: azure/setup-helm@v4
         with:
