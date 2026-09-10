@@ -14,19 +14,70 @@ structured diagnosis with an evidence chain and a confidence score computed in c
 
 ## A worked example
 
-> **Not yet captured.** The stack has not been run against a live model, so there is no
-> real trace to show here, and a hand-written one pretending to be output would be worse
-> than an empty section. Produce it with:
+Real output from `make example`, run against `llama3.2:3b` on CPU. Reproduce it with:
+
+```bash
+make up && make pull-models && make seed-failures
+make example                     # renders the schema-drift investigation as markdown
+```
+
+**The failure Airflow reported**
+
+```
+dag_id    schema_drift_orders
+task_id   build_orders_by_customer
+exception UndefinedColumn
+message   column "customer_id" does not exist
+LINE 3:     customer_id,
+            ^
+HINT:  Perhaps you meant to reference the column "orders.customer_uuid".
+```
+
+**The path it took**: `triage -> gather_evidence -> form_hypothesis -> test_hypothesis ->
+gather_evidence -> form_hypothesis -> test_hypothesis -> gather_evidence -> conclude`
+
+Nine steps, about four minutes wall clock. The last `gather_evidence` returned nothing the
+investigation did not already hold, which is what ended it: running out of information is
+routed separately from running out of budget.
+
+**What it looked at**
+
+1. `fetch_task_logs`: HINT: Perhaps you meant to reference the column "orders.customer_uuid".
+2. `get_dag_source`: /opt/airflow/dags/schema_drift_orders.py: 67 lines
+3. `compare_schema_snapshot`: raw.orders has snapshots, but none from that far back; nothing to compare against without widening as_of
+4. `get_upstream_task_state`: all 1 upstream tasks of build_orders_by_customer succeeded
+5. `check_connection_health` (could not answer): returned forbidden: Connection 'connection_id' is not one this agent may read. Allowed: airflow, warehouse
+6. `compare_schema_snapshot`: **raw.orders drifted: customer_id appears to have been renamed to customer_uuid**
+7. `inspect_table_schema`: raw.orders has 5 columns: order_id, customer_uuid, order_ts, amount_cents, status
+8. `compare_schema_snapshot`: raw.orders has snapshots, but none from that far back; nothing to compare against without widening as_of
+
+Step 5 is the read-only boundary refusing a connection the agent may not touch, recorded as
+evidence rather than raised. Steps 3 and 8 are the model passing a placeholder `as_of` and
+getting nothing back, twice.
+
+**What it believed, and what ruled it out**
+
+> - **inconclusive**: The task is using an outdated connection.
+>   - test: `check_connection_health(conn_id='connection_id')`
+>   - result: the connection is not readable by the agent, which does not confirm or refute it
+> - **inconclusive**: The task is trying to reference a column that has been renamed in the schema.
+>   - test: `compare_schema_snapshot(conn_id='connection_id', table='raw.orders', as_of='2022-01-01')`
+>   - result: no snapshots from that date to compare against
+
+**The diagnosis**
+
+> **schema_drift** (confidence 0.76, conclusive)
 >
-> ```bash
-> make up && make pull-models && make seed-failures
-> make example                     # renders the schema-drift investigation as markdown
-> ```
+> The task failed due to a schema drift issue.
 >
-> The output of `make example` is generated from the live API and drops straight into this
-> section. It shows the failure Airflow reported, the path the investigation took through
-> the graph, what each tool found, **what was ruled out and what ruled it out**, and the
-> final diagnosis with its computed confidence.
+> **Proposed fix:** Update the task to reference the new column name 'customer_uuid'
+> instead of 'customer_id'.
+>
+> Responsible task: `build_orders_by_customer`
+
+Right category, right fix, **wrong attribution**: it blamed the task that visibly failed
+rather than `land_raw_orders`, which is the one that renamed the column. That is the exact
+mistake this project exists to catch, and a 3B model still makes it.
 
 The scenario it writes up: an upstream job renames `raw.orders.customer_id` to
 `customer_uuid`. A downstream aggregate still selects the old name and fails with
@@ -37,19 +88,55 @@ visibly failed.
 
 ## Accuracy
 
-> **Not yet measured.** No evaluation run has been performed, so no numbers are published.
-> This section stays empty rather than carrying a plausible-looking table, because a
-> claimed accuracy figure is worth less than nothing.
->
-> ```bash
-> make evaluate                                    # the default provider, Ollama
-> LLM_PROVIDER=anthropic make evaluate             # a frontier model, needs a key
-> ```
->
-> `make evaluate` triggers all eight seeded scenarios, waits for the diagnoses, and writes
-> the table to `results/accuracy.md`. Run it against both a local and a frontier model and
-> paste both tables here. The comparison is the point: small local models are noticeably
-> weaker at multi-step tool selection, and showing the gap is more useful than hiding it.
+Measured, not claimed. `make evaluate` triggers all eight seeded scenarios, waits for the
+diagnoses, and writes the table to `results/accuracy.md`.
+
+```bash
+make evaluate                                    # the default provider, Ollama
+LLM_PROVIDER=anthropic make evaluate             # a frontier model, needs a key
+```
+
+### `llama3.2:3b`, CPU inference, no GPU
+
+| Scenario | Expected | Diagnosed | Confidence | Attribution | Verdict |
+|---|---|---|---|---|---|
+| `schema_drift_orders` | schema_drift | schema_drift | 0.76 | wrong | correct |
+| `null_explosion_customers` | data_quality_regression | data_quality_regression | 0.65 | wrong | correct |
+| `upstream_dependency_failure` | upstream_dependency_failure | data_quality_regression | 0.56 | correct | wrong |
+| `connection_timeout_api` | transient_infrastructure | data_quality_regression | 0.73 | n/a | wrong |
+| `bad_sql_join_explosion` | query_defect | query_defect | 0.70 | n/a | correct |
+| `stale_partition_missing` | missing_upstream_data | upstream_dependency_failure | 0.56 | n/a | wrong |
+| `type_coercion_failure` | type_mismatch | data_quality_regression | 0.33 | n/a | wrong |
+| `healthy_baseline` | no incident | none | 0.00 | n/a | correct |
+
+**Category accuracy 50%** (4/8) &nbsp;&nbsp; Attribution accuracy 33% (1/3) &nbsp;&nbsp;
+Conclusive on failing scenarios 100% &nbsp;&nbsp; Mean confidence 0.61 &nbsp;&nbsp;
+**Calibration gap -0.16**
+
+No frontier-model row: no API key was available to run one. The comparison is worth adding,
+and the command above is all it takes.
+
+### Reading the numbers honestly
+
+Half is not a good score, and the failure modes are more instructive than the total.
+
+**`data_quality_regression` is the model's default answer.** It appears in four of the
+eight rows, including for a `ConnectTimeout` and a numeric cast error, neither of which is
+a data quality problem. A 3B model settles on a plausible category and stops discriminating.
+
+**Being conclusive is not the hard part.** 100% of failing scenarios now reach a verdict,
+up from 0% before the loop was fixed. Getting the verdict right is a separate problem, and
+it is the one that needs a larger model.
+
+**The calibration gap is the encouraging number.** At -0.16, wrong answers came out *less*
+confident than right ones. Confidence is computed in code from the shape of the
+investigation, never self-reported, and this is the evidence that the choice was worth
+making: the score degrades on its own when the evidence is thin.
+
+**Attribution is the weakest dimension**, at one scenario in three. The agent tends to blame
+the task that visibly failed. Naming the upstream task that actually broke the contract is
+the hardest thing this agent is asked to do, and it is where a stronger model would show
+the largest gain.
 
 The harness reports three things separately, and the reasons matter:
 
