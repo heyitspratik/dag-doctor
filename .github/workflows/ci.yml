@@ -79,37 +79,39 @@ jobs:
   dags:
     name: Parse the seeded DAGs
     runs-on: ubuntu-latest
-    # Parsed against a real Airflow rather than only as source, which is what catches an
-    # operator argument that no longer exists or a provider that is not in the image.
-    container:
-      image: apache/airflow:${{ vars.AIRFLOW_IMAGE_TAG || '2.10.5' }}
-      options: --user root
     steps:
       - uses: actions/checkout@v4
 
-      # Kept in step with docker/airflow.Dockerfile by tests/unit/test_airflow_image.py.
-      - name: Install what the failure callback needs
-        run: |
-          pip install --no-cache-dir \
-            "aiokafka==0.14.0" "pydantic-settings>=2.6,<3.0" "structlog>=24.4,<27"
+      # Built rather than pulled, so this parses the DAGs against the image the stack
+      # actually runs, and the callback's dependencies come from one place instead of
+      # being restated here. The Airflow image also refuses pip as root, which a
+      # `container:` job cannot avoid because the workspace needs a root checkout.
+      - name: Build the Airflow image the stack uses
+        run: docker build -f docker/airflow.Dockerfile -t dag-doctor-airflow:ci .
 
       - name: Import every DAG file
-        env:
-          AIRFLOW_HOME: /tmp/airflow
-          AIRFLOW__CORE__LOAD_EXAMPLES: "false"
         run: |
-          export PYTHONPATH="$GITHUB_WORKSPACE/src"
-          airflow db migrate
-          python - <<'PY'
-          from airflow.models import DagBag
+          docker run --rm \
+            -e AIRFLOW_HOME=/tmp/airflow \
+            -e AIRFLOW__CORE__LOAD_EXAMPLES=false \
+            -e PYTHONPATH=/opt/airflow/dag_doctor_src \
+            -v "$PWD/airflow/dags:/opt/airflow/dags:ro" \
+            -v "$PWD/airflow/seed:/opt/airflow/seed:ro" \
+            -v "$PWD/src:/opt/airflow/dag_doctor_src:ro" \
+            dag-doctor-airflow:ci \
+            bash -c '
+              airflow db migrate >/dev/null 2>&1
+              python - <<PY
+              from airflow.models import DagBag
 
-          bag = DagBag("airflow/dags", include_examples=False)
-          for path, error in bag.import_errors.items():
-              print(f"::error file={path}::{error}")
-          if bag.import_errors:
-              raise SystemExit(1)
-          print("Parsed:", ", ".join(sorted(bag.dag_ids)))
-          PY
+              bag = DagBag("/opt/airflow/dags", include_examples=False)
+              for path, error in bag.import_errors.items():
+                  print(f"::error file={path}::{error}")
+              if bag.import_errors:
+                  raise SystemExit(1)
+              print("Parsed:", ", ".join(sorted(bag.dag_ids)))
+              PY
+            '
 
   helm:
     name: Lint and render the chart

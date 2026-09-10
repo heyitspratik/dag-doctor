@@ -21,3 +21,11 @@ updates:
       interval: weekly
     commit-message:
       prefix: "chore(docker)"
+    ignore:
+      # pyproject pins requires-python to >=3.12,<3.13, so a major or minor bump of the
+      # base image cannot resolve an interpreter and the build fails. Patch updates are
+      # still wanted; raising the floor is a deliberate decision, not a dependency bump.
+      - dependency-name: "python"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
