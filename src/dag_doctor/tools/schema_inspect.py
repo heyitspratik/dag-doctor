@@ -146,11 +146,18 @@ class SchemaDiff(ToolOutput):
     likely_renames: list[RenamedColumn]
     has_drift: bool
     baseline_created: bool
+    #: Snapshots exist for this table, but none from on or before the requested moment.
+    baseline_too_recent: bool = False
 
     def summarise(self) -> str:
         """One line describing the drift, or its absence."""
         if self.baseline_created:
             return f"no prior snapshot of {self.table}; recorded one for next time"
+        if self.baseline_too_recent:
+            return (
+                f"{self.table} has snapshots, but none from that far back; "
+                f"nothing to compare against without widening as_of"
+            )
         if not self.has_drift:
             return f"{self.table} is unchanged since {self.baseline_captured_at}"
         if self.likely_renames:
@@ -209,6 +216,14 @@ class CompareSchemaSnapshot(BaseTool[SchemaSnapshotInput, SchemaDiff]):
                 session, tool_input.connection, table.qualified, tool_input.as_of
             )
             if baseline is None:
+                # Only bootstrap when the table has never been seen. If snapshots exist
+                # and as_of simply excludes them, recording the current shape would
+                # overwrite the very baseline the caller was asking to compare against,
+                # and every later comparison would report no drift. That is how a real
+                # rename went undetected for a whole afternoon.
+                if await self._has_any_snapshot(session, tool_input.connection, table.qualified):
+                    return _no_baseline(tool_input.connection, table.qualified)
+
                 await self._record(session, tool_input.connection, table.qualified, current)
                 await session.commit()
                 return SchemaDiff(
@@ -242,6 +257,15 @@ class CompareSchemaSnapshot(BaseTool[SchemaSnapshotInput, SchemaDiff]):
         if as_of is not None:
             statement = statement.where(SchemaSnapshot.captured_at <= as_of)
         return (await session.execute(statement)).scalar_one_or_none()
+
+    async def _has_any_snapshot(self, session: AsyncSession, connection: str, table: str) -> bool:
+        """Whether this table has ever been snapshotted, ignoring any as_of window."""
+        statement = (
+            select(SchemaSnapshot.id)
+            .where(SchemaSnapshot.connection == connection, SchemaSnapshot.table_name == table)
+            .limit(1)
+        )
+        return (await session.execute(statement)).scalar_one_or_none() is not None
 
     async def _record(
         self, session: AsyncSession, connection: str, table: str, columns: list[ColumnSpec]
@@ -291,6 +315,22 @@ async def reflect_columns(
         Its columns.
     """
     return await _reflect(connections, connection, TableRef.parse(table))
+
+
+def _no_baseline(connection: str, table: str) -> SchemaDiff:
+    """Report that no snapshot is old enough, without writing a misleading one."""
+    return SchemaDiff(
+        connection=connection,
+        table=table,
+        baseline_captured_at=None,
+        added=[],
+        removed=[],
+        changed=[],
+        likely_renames=[],
+        has_drift=False,
+        baseline_created=False,
+        baseline_too_recent=True,
+    )
 
 
 def _diff(

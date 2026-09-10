@@ -168,3 +168,45 @@ async def test_a_snapshot_taken_after_the_as_of_moment_is_ignored(connections, s
     )
 
     assert "customer_uuid" in result.data.added
+
+
+async def test_an_as_of_before_every_snapshot_does_not_overwrite_the_baseline(
+    connections, session_factory
+):
+    # The defect this guards: when as_of excluded every snapshot, the tool treated that as
+    # "never seen" and recorded the current shape as the new baseline. On a drifted table
+    # that overwrites the very reference the caller was comparing against, and every later
+    # comparison reports no drift. A real rename went undetected for an afternoon.
+    tool = CompareSchemaSnapshot(connections, session_factory)
+    await tool.run({"connection": "warehouse", "table": "orders"})
+    before = await _snapshots(session_factory)
+
+    result = await tool.run(
+        {
+            "connection": "warehouse",
+            "table": "orders",
+            "as_of": (datetime.now(UTC) - timedelta(days=365)).isoformat(),
+        }
+    )
+
+    assert result.ok
+    assert result.data.baseline_too_recent is True
+    assert result.data.baseline_created is False
+    assert len(await _snapshots(session_factory)) == len(before), "it wrote another snapshot"
+    assert "nothing to compare against" in result.data.summarise()
+
+
+async def test_a_table_never_seen_before_still_records_a_first_baseline(
+    connections, session_factory
+):
+    # Bootstrapping is still right when the table genuinely has no history.
+    result = await CompareSchemaSnapshot(connections, session_factory).run(
+        {
+            "connection": "warehouse",
+            "table": "orders",
+            "as_of": (datetime.now(UTC) - timedelta(days=365)).isoformat(),
+        }
+    )
+
+    assert result.data.baseline_created is True
+    assert len(await _snapshots(session_factory)) == 1
