@@ -18,6 +18,11 @@ and why, name the specific column, table or task involved, and propose a fix.
 Do not propose applying anything yourself; this agent only recommends. If the fix belongs
 upstream of the task that failed, say so and name the responsible task.
 
+The responsible task must be one of these, and nothing else. These are the tasks this
+investigation has actually seen; a tool name or an invented task is not an answer. Leave
+it empty if none of them is responsible.
+$known_tasks
+
 List anything you could not establish under unknowns. A diagnosis that admits its gaps is
 more useful than one that hides them, and a reader will find the gaps anyway.
 

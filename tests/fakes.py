@@ -173,12 +173,13 @@ def verdict(outcome: str, notes: str = "the snapshot diff shows the rename") -> 
 
 def conclusion(
     category: RootCauseCategory = RootCauseCategory.SCHEMA_DRIFT,
+    responsible_task_id: str | None = "land_raw_orders",
 ) -> Conclusion:
     return Conclusion(
         root_cause_category=category,
         summary="orders.customer_id was renamed to customer_uuid, breaking the aggregate",
         proposed_fix="Select customer_uuid, or restore the old name upstream",
         responsible_dag_id="schema_drift_orders",
-        responsible_task_id="land_raw_orders",
+        responsible_task_id=responsible_task_id,
         unknowns=["who made the upstream change"],
     )

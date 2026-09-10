@@ -36,7 +36,10 @@ from ..messaging.conftest import FakeProducer
 def _script() -> dict[str, list]:
     return {
         "triage": [triage_answer()],
-        "gather_evidence": [tool_plan("fetch_task_logs", "compare_schema_snapshot")],
+        # The upstream tool has to run before the diagnosis may blame an upstream task.
+        "gather_evidence": [
+            tool_plan("fetch_task_logs", "compare_schema_snapshot", "get_upstream_task_state")
+        ],
         "form_hypothesis": [hypothesis_set()],
         "test_hypothesis": [verdict("confirmed")],
         "conclude": [conclusion()],
@@ -110,7 +113,7 @@ async def test_the_full_trace_is_persisted(settings, session_factory, toolbox, f
         "conclude",
     ]
     assert [step.sequence for step in steps] == [1, 2, 3, 4, 5]
-    assert len(evidence) == 3
+    assert len(evidence) == 4
     assert hypotheses[0].outcome is HypothesisOutcome.CONFIRMED
 
 

@@ -107,6 +107,10 @@ def toolbox() -> Toolbox:
             make_tool("fetch_task_logs", "UndefinedColumn: column customer_id does not exist"),
             make_tool("compare_schema_snapshot", DRIFT_FINDING),
             make_tool("get_dag_run_history", "newly failing: 1 of the last 11 runs failed"),
+            make_tool(
+                "get_upstream_task_state",
+                "land_raw_orders succeeded at 02:14, writing raw.orders",
+            ),
             make_tool("check_connection_health", "connection answered in 3ms"),
             make_tool("profile_table", "unavailable", fails=True),
         ]

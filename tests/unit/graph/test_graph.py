@@ -34,7 +34,9 @@ async def _run(caller, toolbox, budgets, failure) -> InvestigationState:
 def _full_script(*, outcome: str = "confirmed") -> dict[str, list]:
     return {
         "triage": [triage_answer()],
-        "gather_evidence": [tool_plan("fetch_task_logs", "compare_schema_snapshot")],
+        "gather_evidence": [
+            tool_plan("fetch_task_logs", "compare_schema_snapshot", "get_upstream_task_state")
+        ],
         "form_hypothesis": [hypothesis_set()],
         "test_hypothesis": [verdict(outcome)],
         "conclude": [conclusion()],
@@ -117,7 +119,13 @@ async def test_a_refuted_hypothesis_is_not_proposed_again(toolbox, budgets, fail
     caller = ScriptedCaller(
         {
             "triage": [triage_answer()],
-            "gather_evidence": [tool_plan("fetch_task_logs")],
+            # A different tool the second time round. A repeat would be skipped as already
+            # known, and a round that gathers nothing new now concludes rather than
+            # forming a second hypothesis, which is the thing under test here.
+            "gather_evidence": [
+                tool_plan("fetch_task_logs"),
+                tool_plan("get_dag_run_history"),
+            ],
             "form_hypothesis": [
                 hypothesis_set(statement="the warehouse was unreachable"),
                 hypothesis_set(),
@@ -314,6 +322,7 @@ async def test_the_trace_records_what_each_node_decided(toolbox, budgets, failur
     assert by_node["gather_evidence"].output["ran"] == [
         "fetch_task_logs",
         "compare_schema_snapshot",
+        "get_upstream_task_state",
     ]
     assert by_node["test_hypothesis"].output["outcome"] == "confirmed"
     assert "signature" in by_node["conclude"].output["confidence_breakdown"]
@@ -390,6 +399,7 @@ async def test_repeating_across_iterations_is_also_skipped(toolbox, failure_even
             "gather_evidence": [tool_plan("fetch_task_logs")],
             "form_hypothesis": [hypothesis_set()],
             "test_hypothesis": [verdict("refuted")],
+            "conclude": [conclusion()],
         }
     )
 
@@ -398,3 +408,46 @@ async def test_repeating_across_iterations_is_also_skipped(toolbox, failure_even
     assert [item.tool_name for item in state.evidence].count("fetch_task_logs") == 1
     by_node = [step for step in state.steps if step.node == "gather_evidence"]
     assert by_node[-1].output["already_known"] == 1
+
+    # Two rounds, not three: the round that learned nothing ended the investigation
+    # instead of spending the last iteration re-reading what it already had.
+    assert len(by_node) == 2
+    assert state.halt_reason is HaltReason.CONCLUDED
+
+
+async def test_a_responsible_task_that_does_not_exist_is_dropped(toolbox, budgets, failure_event):
+    # Observed in a live run: the model named the tool "fetch_task_logs" as the task at
+    # fault. Blaming a task nobody can open reads as a finding and has to be disproved.
+    caller = ScriptedCaller(
+        {
+            "triage": [triage_answer()],
+            "gather_evidence": [tool_plan("fetch_task_logs")],
+            "form_hypothesis": [hypothesis_set()],
+            "test_hypothesis": [verdict("confirmed")],
+            "conclude": [conclusion(responsible_task_id="fetch_task_logs")],
+        }
+    )
+
+    state = await _run(caller, toolbox, budgets, failure_event)
+
+    assert state.diagnosis.responsible_task_id is None
+    assert state.diagnosis.responsible_dag_id is None
+
+
+async def test_the_failing_task_is_a_task_that_exists(toolbox, budgets, failure_event):
+    # The one attribution always available without the upstream tool having run.
+    caller = ScriptedCaller(
+        {
+            "triage": [triage_answer()],
+            "gather_evidence": [tool_plan("fetch_task_logs")],
+            "form_hypothesis": [hypothesis_set()],
+            "test_hypothesis": [verdict("confirmed")],
+            "conclude": [conclusion(responsible_task_id=failure_event.task_id)],
+        }
+    )
+
+    state = await _run(caller, toolbox, budgets, failure_event)
+
+    assert state.diagnosis.responsible_task_id == failure_event.task_id
+    # Named without its DAG the attribution cannot be looked up, so the incident supplies it.
+    assert state.diagnosis.responsible_dag_id == failure_event.dag_id
