@@ -6,9 +6,11 @@ than overrunning the budget, and it records every result as evidence, including 
 failures. A tool that could not answer is something the investigation should know.
 """
 
+import json
+from collections.abc import Mapping
 from typing import ClassVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue
 
 from dag_doctor.core.logging import get_logger
 from dag_doctor.core.models import Evidence, NodeName
@@ -85,10 +87,27 @@ class GatherEvidenceNode(InvestigationNode):
         )
         plan = await self._caller.call(self.node, prompt, ToolPlan)
 
+        context = state.tool_context()
+        already = {(item.tool_name, _fingerprint(item.tool_input)) for item in state.evidence}
         gathered: list[Evidence] = []
+        repeated = 0
+
         for call in plan.value.calls[:allowed]:
             arguments = await self._arguments.resolve(self.node, call.tool, state, call.why)
-            gathered.append(await self._toolbox.run(call.tool, arguments, state.tool_context()))
+            final = self._toolbox.arguments_for(call.tool, arguments, context)
+            signature = (call.tool, _fingerprint(final))
+
+            if signature in already:
+                # The answer is already in the evidence, and in the prompt the model just
+                # read. Running it again spends a tool call to learn nothing, and a model
+                # that keeps re-asking one settled question can burn a third of a budget
+                # doing it.
+                repeated += 1
+                logger.info("evidence.already_gathered", tool=call.tool)
+                continue
+
+            already.add(signature)
+            gathered.append(await self._toolbox.run(call.tool, arguments, context))
 
         return NodeUpdate(
             updates={
@@ -103,11 +122,17 @@ class GatherEvidenceNode(InvestigationNode):
             step_output={
                 "ran": [item.tool_name for item in gathered],
                 "succeeded": [item.tool_name for item in gathered if item.succeeded],
+                "already_known": repeated,
             },
             model_used=plan.model_used,
             prompt_tokens=plan.prompt_tokens,
             completion_tokens=plan.completion_tokens,
         )
+
+
+def _fingerprint(arguments: Mapping[str, JsonValue]) -> str:
+    """A stable identity for one set of tool arguments, order-independent."""
+    return json.dumps(dict(arguments), sort_keys=True, default=str)
 
 
 def _render_evidence(state: InvestigationState) -> str:

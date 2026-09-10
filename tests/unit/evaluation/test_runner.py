@@ -218,3 +218,43 @@ def test_the_airflow_client_uses_the_configured_credentials():
     clients = build_clients(Settings(), "http://agent")
 
     assert str(clients.airflow.base_url) == "http://localhost:8080"
+
+
+async def test_a_dropped_connection_while_polling_does_not_end_the_run():
+    # A real evaluation died forty minutes in when one keep-alive dropped, losing every
+    # scenario's result. A failed poll is not a failed scenario.
+    calls = {"n": 0}
+    diagnosis = _diagnosis()
+
+    def flaky(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/incidents":
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+            return httpx.Response(
+                200,
+                json={
+                    "items": [{"id": "incident-x", "received_at": datetime.now(UTC).isoformat()}],
+                    "next_cursor": None,
+                },
+            )
+        return httpx.Response(200, json={"diagnosis": diagnosis})
+
+    clients = Clients(
+        airflow=httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda _r: httpx.Response(200, json={})),
+            base_url="http://airflow",
+        ),
+        agent=httpx.AsyncClient(transport=httpx.MockTransport(flaky), base_url="http://agent"),
+    )
+
+    observed = await await_diagnosis(
+        clients,
+        DRIFT,
+        datetime.now(UTC) - timedelta(seconds=5),
+        timeout_s=2.0,
+        poll_interval_s=0.01,
+    )
+
+    assert observed.diagnosed
+    assert calls["n"] >= 2, "it gave up after the first failure"

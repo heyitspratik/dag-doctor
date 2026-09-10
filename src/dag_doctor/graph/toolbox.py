@@ -78,7 +78,7 @@ class Toolbox:
                 succeeded=False,
             )
 
-        supplied = self._with_context(tool, arguments, context)
+        supplied = self.arguments_for(name, arguments, context)
         result = await tool.run(supplied)
         return Evidence(
             tool_name=name,
@@ -88,6 +88,22 @@ class Toolbox:
             succeeded=result.ok,
             duration_ms=result.duration_ms,
         )
+
+    def arguments_for(
+        self,
+        name: str,
+        arguments: Mapping[str, JsonValue],
+        context: Mapping[str, JsonValue] | None = None,
+    ) -> dict[str, JsonValue]:
+        """The arguments a call would actually run with, known facts included.
+
+        Exposed so a caller can tell whether a call it is about to make is one it has
+        already made, without running it to find out.
+        """
+        tool = self._tools.get(name)
+        if tool is None:
+            return dict(arguments)
+        return self._with_context(tool, arguments, context)
 
     def _with_context(
         self,

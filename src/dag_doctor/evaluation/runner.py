@@ -99,7 +99,18 @@ async def await_diagnosis(
     """
     deadline = time.monotonic() + timeout_s
     while True:
-        observed = await _latest_diagnosis(clients, scenario, started)
+        try:
+            observed = await _latest_diagnosis(clients, scenario, started)
+        except httpx.HTTPError as exc:
+            # A poll that fails is not a scenario that failed. Over a run lasting tens of
+            # minutes a dropped keep-alive is ordinary, and letting one kill the whole
+            # evaluation loses every other scenario's result with it.
+            logger.warning(
+                "evaluation.poll_failed",
+                dag_id=scenario.dag_id,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            observed = None
         if observed is not None:
             return observed
         remaining = deadline - time.monotonic()

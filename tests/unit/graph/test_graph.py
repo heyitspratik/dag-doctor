@@ -355,3 +355,46 @@ async def test_a_hypothesis_that_did_not_survive_never_reaches_a_conclusion(
 
     assert caller.call_count("conclude") == 0
     assert not state.diagnosis.is_conclusive
+
+
+async def test_a_tool_call_whose_answer_is_already_known_is_not_repeated(
+    toolbox, budgets, failure_event
+):
+    # Observed against a live 3B model: it re-ran the same drift check three times in one
+    # investigation and then ran out of tool calls. The answer was already in the evidence
+    # and in the prompt it had just read, so the repeat bought nothing and cost a third of
+    # the budget.
+    caller = ScriptedCaller(
+        {
+            "triage": [triage_answer()],
+            "gather_evidence": [tool_plan("fetch_task_logs", "fetch_task_logs")],
+            "form_hypothesis": [hypothesis_set()],
+            "test_hypothesis": [verdict("confirmed")],
+            "conclude": [conclusion()],
+        }
+    )
+
+    state = await _run(caller, toolbox, budgets, failure_event)
+
+    # One gather call plus the hypothesis test, rather than two identical gather calls.
+    assert [item.tool_name for item in state.evidence].count("fetch_task_logs") == 1
+    assert state.tool_calls_made == 2
+
+
+async def test_repeating_across_iterations_is_also_skipped(toolbox, failure_event):
+    # The waste that actually happened was across loops, not within one plan.
+    budgets = BudgetSettings(max_iterations=3)
+    caller = ScriptedCaller(
+        {
+            "triage": [triage_answer()],
+            "gather_evidence": [tool_plan("fetch_task_logs")],
+            "form_hypothesis": [hypothesis_set()],
+            "test_hypothesis": [verdict("refuted")],
+        }
+    )
+
+    state = await _run(caller, toolbox, budgets, failure_event)
+
+    assert [item.tool_name for item in state.evidence].count("fetch_task_logs") == 1
+    by_node = [step for step in state.steps if step.node == "gather_evidence"]
+    assert by_node[-1].output["already_known"] == 1
