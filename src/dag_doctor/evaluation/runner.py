@@ -28,10 +28,13 @@ from dag_doctor.evaluation.scorer import Observed, ScenarioResult, Scorecard
 
 logger = get_logger(__name__)
 
-#: How long to wait for a diagnosis before giving up on a scenario. Generous, because a
-#: 3B model running five iterations against a cold Ollama genuinely takes minutes, and a
-#: harness that times out early would report the model as wrong rather than as slow.
-DEFAULT_TIMEOUT_S = 600.0
+#: How long to wait for a diagnosis before giving up on a scenario.
+#:
+#: Every scenario is awaited at once but a worker investigates one incident at a time, so
+#: the last one in the queue waits for all the others first. Sized for the whole queue
+#: rather than a single investigation: a timeout shorter than that reports a model as
+#: wrong when it was merely still waiting, which is a harness measuring itself.
+DEFAULT_TIMEOUT_S = 2400.0
 POLL_INTERVAL_S = 5.0
 
 #: The control is given a shorter window: it is expected to produce nothing, and waiting

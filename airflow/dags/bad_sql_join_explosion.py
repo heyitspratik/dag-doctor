@@ -30,7 +30,9 @@ DEFAULT_ARGS = {
 }
 
 # The defect is the missing aggregation on order_tags: one order has forty tags, so every
-# order row is multiplied by its tag count before anything is summed.
+# order row is multiplied by its tag count before anything is summed. The amplifier is
+# sized so the product genuinely outruns the statement timeout; at 400 it finished inside
+# it and the scenario silently succeeded, which is a seeded failure that does not fail.
 EXPLODING_JOIN = """
 SET statement_timeout = '20s';
 
@@ -43,7 +45,7 @@ SELECT
     sum(orders.amount_cents) AS revenue_cents
 FROM raw.orders AS orders
 JOIN raw.order_tags AS tags ON tags.order_id = orders.order_id
-CROSS JOIN generate_series(1, 400) AS amplifier
+CROSS JOIN generate_series(1, 20000) AS amplifier
 GROUP BY tags.tag;
 """
 

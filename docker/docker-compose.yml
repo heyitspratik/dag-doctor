@@ -152,7 +152,10 @@ services:
       WAREHOUSE_DSN: postgresql+psycopg://dagdoctor_ro:dagdoctor_ro@postgres:5432/warehouse
       METRICS_PORT: 9100
     ports:
-      - "${WORKER_METRICS_PORT:-9100}:9100"
+      # A range, not a single port, so `--scale agent-worker=3` works. The worker is meant
+      # to scale across the failure topic's partitions, and a fixed host port silently
+      # caps it at one replica.
+      - "${WORKER_METRICS_PORTS:-9100-9102}:9100"
     depends_on:
       migrate:
         condition: service_completed_successfully
