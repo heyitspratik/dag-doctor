@@ -69,11 +69,12 @@ def test_the_airflow_image_installs_it(package):
     assert package.replace("_", "-") in DOCKERFILE or package in DOCKERFILE
 
 
-@pytest.mark.parametrize("package", REQUIRED)
-def test_the_dag_parsing_ci_job_installs_it(package):
-    # CI parses the DAGs against a real Airflow, which is the check that would have caught
-    # this. It only helps if it installs the same things the image does.
-    assert package.replace("_", "-") in CI or package in CI
+def test_the_dag_parsing_ci_job_builds_the_image_rather_than_restating_it():
+    # CI used to repeat this dependency list, which is a second place for it to drift
+    # from. Building the real image instead makes the Dockerfile the only source of
+    # truth, and parses the DAGs against what the stack actually runs.
+    assert "docker/airflow.Dockerfile" in CI
+    assert "DagBag" in CI
 
 
 def test_the_callback_does_not_drag_in_the_agent_itself():
